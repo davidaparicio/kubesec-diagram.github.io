@@ -4,7 +4,7 @@ const config = {
   imagePaths: {
     debug: "./kubesec-diagram.svg",
     production:
-      "https://media.githubusercontent.com/media/kubesec-diagram/kubesec-diagram.github.io/refs/heads/main/kubesec-diagram.svg",
+      "https://raw.githubusercontent.com/kubesec-diagram/kubesec-diagram.github.io/refs/heads/main/kubesec-diagram.svg",
   },
   runtime: {
     bundle: "./dist/app.bundle.js",

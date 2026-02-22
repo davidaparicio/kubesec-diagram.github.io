@@ -17,7 +17,7 @@ It is made for the purpose stated above inside Telenor Norway. It doesn't reflec
 
 ## Changelog
 
-* v10 ()
+* v10 (2026-02-22)
   * Added gateway-api as an alternative to ingress
   * More info about properties of a Namespace
   * Moved over from using .png exports from draw.io to using .svg, this is a huge win!
