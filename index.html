@@ -1,274 +1,455 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta
+            name="description"
+            content="Interactive annotated security focused kubernetes diagram."
+        />
+        <meta name="author" content="Lars Solberg" />
 
-<head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Interactive annotated security focused kubernetes diagram." />
-    <meta name="author" content="Lars Solberg" />
+        <link
+            rel="icon"
+            type="image/svg+xml"
+            href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="%23006ce0"/><circle cx="16" cy="16" r="4" fill="%23c00"/><circle cx="32" cy="16" r="4" fill="%23f60"/><circle cx="48" cy="16" r="4" fill="%23ff0"/><circle cx="16" cy="32" r="4" fill="%23ff0"/><circle cx="32" cy="32" r="4" fill="%23c00"/><circle cx="48" cy="32" r="4" fill="%23f60"/><circle cx="16" cy="48" r="4" fill="%23f60"/><circle cx="32" cy="48" r="4" fill="%23ff0"/><circle cx="48" cy="48" r="4" fill="%23c00"/></svg>'
+        />
 
-    <link rel="icon" type="image/svg+xml"
-        href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="%23006ce0"/><circle cx="16" cy="16" r="4" fill="%23c00"/><circle cx="32" cy="16" r="4" fill="%23f60"/><circle cx="48" cy="16" r="4" fill="%23ff0"/><circle cx="16" cy="32" r="4" fill="%23ff0"/><circle cx="32" cy="32" r="4" fill="%23c00"/><circle cx="48" cy="32" r="4" fill="%23f60"/><circle cx="16" cy="48" r="4" fill="%23f60"/><circle cx="32" cy="48" r="4" fill="%23ff0"/><circle cx="48" cy="48" r="4" fill="%23c00"/></svg>'>
+        <title>kubesec-diagram</title>
+        <link rel="stylesheet" href="styles.css" />
+    </head>
 
-    <title>kubesec-diagram</title>
-    <link rel="stylesheet" href="styles.css">
+    <body>
+        <noscript>
+            <style>
+                body > *:not(noscript) {
+                    display: none !important;
+                }
+            </style>
+            <div
+                style="
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    width: 100vw;
+                    height: 100vh;
+                    background: #fffbe6;
+                    color: #333;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 2em;
+                    box-sizing: border-box;
+                    font-family: sans-serif;
+                    text-align: center;
+                "
+            >
+                <h1 style="margin-bottom: 1em">JavaScript is disabled</h1>
+                <p style="max-width: 500px">
+                    This interactive diagram requires JavaScript to function.<br /><br />
+                    You can either enable JavaScript in your browser settings,
+                    or open the static image version directly:
+                </p>
+                <p style="margin: 1em 0">
+                    <a
+                        href="https://media.githubusercontent.com/media/kubesec-diagram/kubesec-diagram.github.io/refs/heads/main/kubesec-diagram.svg"
+                        target="_blank"
+                        style="color: #007acc; text-decoration: underline"
+                    >
+                        View raw image
+                    </a>
+                </p>
+                <p style="font-size: 12px; color: #666">
+                    Source:
+                    <a
+                        href="https://github.com/kubesec-diagram/kubesec-diagram.github.io"
+                        target="_blank"
+                        style="color: #007acc"
+                        >kubesec-diagram.github.io</a
+                    >
+                </p>
+            </div>
+        </noscript>
 
-</head>
+        <div id="container">
+            <div id="image-wrapper">
+                <div
+                    id="main-image"
+                    role="img"
+                    aria-label="Kubernetes security diagram"
+                ></div>
 
-<body>
-    <noscript>
-        <style>
-            body>*:not(noscript) {
-                display: none !important;
-            }
-        </style>
-        <div style="
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100vw;
-    height: 100vh;
-    background: #fffbe6;
-    color: #333;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 2em;
-    box-sizing: border-box;
-    font-family: sans-serif;
-    text-align: center;
-  ">
-            <h1 style="margin-bottom: 1em;">JavaScript is disabled</h1>
-            <p style="max-width: 500px;">
-                This interactive diagram requires JavaScript to function.<br><br>
-                You can either enable JavaScript in your browser settings,
-                or open the static image version directly:
-            </p>
-            <p style="margin: 1em 0;">
-                <a href="https://media.githubusercontent.com/media/kubesec-diagram/kubesec-diagram.github.io/refs/heads/main/kubesec-diagram.svg"
-                    target="_blank" style="color: #007acc; text-decoration: underline;">
-                    View raw image
-                </a>
-            </p>
-            <p style="font-size: 12px; color: #666;">
-                Source: <a href="https://github.com/kubesec-diagram/kubesec-diagram.github.io" target="_blank"
-                    style="color: #007acc;">kubesec-diagram.github.io</a>
-            </p>
+                <div id="tooltip-layer"></div>
+            </div>
         </div>
-    </noscript>
 
-    <div id="container">
-        <div id="image-wrapper">
-            <div id="main-image" role="img" aria-label="Kubernetes security diagram"></div>
+        <div id="filter-panel-backdrop" class="filter-panel-backdrop"></div>
+        <aside id="filter-panel" class="filter-panel" aria-hidden="true">
+            <div class="filter-panel-header"></div>
+            <div class="filter-panel-body">
+                <div class="filter-section">
+                    <div class="filter-search-row">
+                        <input
+                            id="filter-search-input"
+                            type="search"
+                            placeholder="Search titles, text, links..."
+                            autocomplete="off"
+                            aria-label="Search annotations"
+                        />
+                        <button
+                            id="filter-reset-btn"
+                            class="filter-icon-btn"
+                            type="button"
+                            aria-label="Clear all filters"
+                            title="Clear all filters"
+                        >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path
+                                    d="M12 5V2L7 7l5 5V9c3.31 0 6 2.69 6 6a6 6 0 0 1-6 6 6 6 0 0 1-5.65-4H4.26A8 8 0 0 0 12 23a8 8 0 0 0 0-16z"
+                                ></path>
+                            </svg>
+                        </button>
+                    </div>
+                    <small id="filter-result-count"
+                        >Showing all annotations</small
+                    >
+                </div>
 
-            <div id="tooltip-layer"></div>
-        </div>
-    </div>
+                <hr class="filter-divider" />
 
-    <div id="filter-panel-backdrop" class="filter-panel-backdrop"></div>
-    <aside id="filter-panel" class="filter-panel" aria-hidden="true">
-        <div class="filter-panel-header">
-        </div>
-        <div class="filter-panel-body">
-            <div class="filter-section">
-                <div class="filter-search-row">
-                    <input id="filter-search-input" type="search" placeholder="Search titles, text, links..." autocomplete="off" aria-label="Search annotations" />
-                    <button id="filter-reset-btn" class="filter-icon-btn" type="button" aria-label="Clear all filters" title="Clear all filters">
-                        <svg viewBox="0 0 24 24" aria-hidden="true">
-                            <path d="M12 5V2L7 7l5 5V9c3.31 0 6 2.69 6 6a6 6 0 0 1-6 6 6 6 0 0 1-5.65-4H4.26A8 8 0 0 0 12 23a8 8 0 0 0 0-16z"></path>
+                <div class="filter-section">
+                    <div
+                        id="filter-tag-controls"
+                        class="tag-control-group"
+                    ></div>
+                </div>
+
+                <hr class="filter-divider" />
+
+                <div class="filter-section">
+                    <div id="filter-results" class="filter-results"></div>
+                </div>
+            </div>
+
+            <div class="filter-panel-controls">
+                <div class="filter-panel-controls-row">
+                    <button
+                        id="floating-theme-toggle"
+                        class="panel-control-btn"
+                        type="button"
+                        aria-label="Toggle dark mode"
+                        title="Toggle dark mode"
+                    >
+                        <svg
+                            class="theme-icon theme-icon-sun-outline"
+                            viewBox="0 0 24 24"
+                            aria-hidden="true"
+                        >
+                            <path
+                                d="M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zm0 2.2a2.8 2.8 0 1 1 0 5.6 2.8 2.8 0 0 1 0-5.6zM11 1h2v3h-2V1zm0 19h2v3h-2v-3zM1 11h3v2H1v-2zm19 0h3v2h-3v-2zM4.22 5.64l1.42-1.42 2.12 2.12-1.42 1.42-2.12-2.12zm12.02 12.02 1.42-1.42 2.12 2.12-1.42 1.42-2.12-2.12zM16.24 6.34l2.12-2.12 1.42 1.42-2.12 2.12-1.42-1.42zM4.22 18.36l2.12-2.12 1.42 1.42-2.12 2.12-1.42-1.42z"
+                            ></path>
                         </svg>
+                        <svg
+                            class="theme-icon theme-icon-sun-filled"
+                            viewBox="0 0 24 24"
+                            aria-hidden="true"
+                        >
+                            <path
+                                d="M12 5a1 1 0 0 1 1 1v1.2a1 1 0 1 1-2 0V6a1 1 0 0 1 1-1zm0 11.8a1 1 0 0 1 1 1V19a1 1 0 1 1-2 0v-1.2a1 1 0 0 1 1-1zM5 12a1 1 0 0 1 1-1h1.2a1 1 0 1 1 0 2H6a1 1 0 0 1-1-1zm11.8 0a1 1 0 0 1 1-1H19a1 1 0 1 1 0 2h-1.2a1 1 0 0 1-1-1zM7.05 7.05a1 1 0 0 1 1.41 0l.85.85a1 1 0 1 1-1.41 1.41l-.85-.85a1 1 0 0 1 0-1.41zm7.79 7.79a1 1 0 0 1 1.41 0l.85.85a1 1 0 0 1-1.41 1.41l-.85-.85a1 1 0 0 1 0-1.41zM16.95 7.05a1 1 0 0 1 0 1.41l-.85.85a1 1 0 0 1-1.41-1.41l.85-.85a1 1 0 0 1 1.41 0zM9.16 14.84a1 1 0 0 1 0 1.41l-.85.85a1 1 0 1 1-1.41-1.41l.85-.85a1 1 0 0 1 1.41 0zM12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7z"
+                            ></path>
+                        </svg>
+                        <span class="theme-label">Dark theme</span>
+                    </button>
+
+                    <div class="user-annotations-row">
+                        <button
+                            id="toggle-user-annotations"
+                            class="user-annotations-btn"
+                            title="Manage user annotations"
+                        >
+                            User Annotations
+                        </button>
+                        <button
+                            id="exit-edit-mode"
+                            class="exit-edit-mode-btn"
+                            title="Exit edit mode"
+                            style="display: none"
+                        >
+                            exit edit
+                        </button>
+                    </div>
+
+                    <button
+                        id="close-filter-panel"
+                        class="close-button close-filter-panel-btn"
+                        type="button"
+                        aria-label="Close filter panel"
+                    >
+                        &times;
                     </button>
                 </div>
-                <small id="filter-result-count">Showing all annotations</small>
             </div>
+        </aside>
 
-            <hr class="filter-divider" />
-
-            <div class="filter-section">
-                <div id="filter-tag-controls" class="tag-control-group"></div>
+        <div class="footer-link">
+            <div class="footer-github">
+                <a
+                    href="https://github.com/kubesec-diagram/kubesec-diagram.github.io"
+                    target="_blank"
+                    >GitHub</a
+                >
+                (<a
+                    href="https://github.com/kubesec-diagram/kubesec-diagram.github.io/issues"
+                    target="_blank"
+                    >issues</a
+                >)
+                <a
+                    href="https://github.com/kubesec-diagram/kubesec-diagram.github.io/stargazers"
+                    target="_blank"
+                    title="Star this project"
+                    >⭐</a
+                >
             </div>
-
-            <hr class="filter-divider" />
-
-            <div class="filter-section">
-                <div id="filter-results" class="filter-results"></div>
-            </div>
+            <span class="footer-meta">
+                <span class="version">v10</span> •
+                <span class="last-updated">Last updated: 2026-02-22</span>
+            </span>
         </div>
 
-        <div class="filter-panel-controls">
-            <div class="filter-panel-controls-row">
-                <button id="floating-theme-toggle" class="panel-control-btn" type="button" aria-label="Toggle dark mode" title="Toggle dark mode">
-                    <svg class="theme-icon theme-icon-sun-outline" viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zm0 2.2a2.8 2.8 0 1 1 0 5.6 2.8 2.8 0 0 1 0-5.6zM11 1h2v3h-2V1zm0 19h2v3h-2v-3zM1 11h3v2H1v-2zm19 0h3v2h-3v-2zM4.22 5.64l1.42-1.42 2.12 2.12-1.42 1.42-2.12-2.12zm12.02 12.02 1.42-1.42 2.12 2.12-1.42 1.42-2.12-2.12zM16.24 6.34l2.12-2.12 1.42 1.42-2.12 2.12-1.42-1.42zM4.22 18.36l2.12-2.12 1.42 1.42-2.12 2.12-1.42-1.42z"></path>
-                    </svg>
-                    <svg class="theme-icon theme-icon-sun-filled" viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M12 5a1 1 0 0 1 1 1v1.2a1 1 0 1 1-2 0V6a1 1 0 0 1 1-1zm0 11.8a1 1 0 0 1 1 1V19a1 1 0 1 1-2 0v-1.2a1 1 0 0 1 1-1zM5 12a1 1 0 0 1 1-1h1.2a1 1 0 1 1 0 2H6a1 1 0 0 1-1-1zm11.8 0a1 1 0 0 1 1-1H19a1 1 0 1 1 0 2h-1.2a1 1 0 0 1-1-1zM7.05 7.05a1 1 0 0 1 1.41 0l.85.85a1 1 0 1 1-1.41 1.41l-.85-.85a1 1 0 0 1 0-1.41zm7.79 7.79a1 1 0 0 1 1.41 0l.85.85a1 1 0 0 1-1.41 1.41l-.85-.85a1 1 0 0 1 0-1.41zM16.95 7.05a1 1 0 0 1 0 1.41l-.85.85a1 1 0 0 1-1.41-1.41l.85-.85a1 1 0 0 1 1.41 0zM9.16 14.84a1 1 0 0 1 0 1.41l-.85.85a1 1 0 1 1-1.41-1.41l.85-.85a1 1 0 0 1 1.41 0zM12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7z"></path>
-                    </svg>
-                    <span class="theme-label">Dark theme</span>
-                </button>
+        <button
+            id="floating-filter-toggle"
+            class="floating-filter-toggle"
+            type="button"
+            aria-label="Open filter menu"
+            title="Open filter menu"
+        >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 7h16v2H4V7zm0 4h16v2H4v-2zm0 4h16v2H4v-2z"></path>
+            </svg>
+        </button>
 
-                <div class="user-annotations-row">
-                    <button id="toggle-user-annotations" class="user-annotations-btn" title="Manage user annotations">User
-                        Annotations</button>
-                    <button id="exit-edit-mode" class="exit-edit-mode-btn" title="Exit edit mode"
-                        style="display: none;">exit edit</button>
+        <!-- User Annotations Modal -->
+        <div id="user-annotations-modal" class="modal" style="display: none">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>User Annotations</h3>
+                    <button id="close-user-modal" class="close-button">
+                        &times;
+                    </button>
                 </div>
-
-                <button id="close-filter-panel" class="close-button close-filter-panel-btn" type="button" aria-label="Close filter panel">&times;</button>
-            </div>
-        </div>
-    </aside>
-
-    <div class="footer-link">
-        <div class="footer-github">
-            <a href="https://github.com/kubesec-diagram/kubesec-diagram.github.io" target="_blank">GitHub</a>
-            (<a href="https://github.com/kubesec-diagram/kubesec-diagram.github.io/issues" target="_blank">issues</a>)
-            <a href="https://github.com/kubesec-diagram/kubesec-diagram.github.io/stargazers" target="_blank"
-                title="Star this project">⭐</a>
-        </div>
-        <span class="footer-meta">
-            <span class="version">v9</span> • <span class="last-updated">Last updated: 2025-08-12</span>
-        </span>
-    </div>
-
-    <button id="floating-filter-toggle" class="floating-filter-toggle" type="button" aria-label="Open filter menu" title="Open filter menu">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M4 7h16v2H4V7zm0 4h16v2H4v-2zm0 4h16v2H4v-2z"></path>
-        </svg>
-    </button>
-
-    <!-- User Annotations Modal -->
-    <div id="user-annotations-modal" class="modal" style="display: none;">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>User Annotations</h3>
-                <button id="close-user-modal" class="close-button">&times;</button>
-            </div>
-            <div class="modal-body">
-                <!-- Add New Annotation Form (Desktop only) -->
-                <div class="add-annotation-form desktop-only">
-                    <h4>Add New Annotation:</h4>
-                    <form id="inline-annotation-form">
-                        <div class="form-row">
+                <div class="modal-body">
+                    <!-- Add New Annotation Form (Desktop only) -->
+                    <div class="add-annotation-form desktop-only">
+                        <h4>Add New Annotation:</h4>
+                        <form id="inline-annotation-form">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="inline-title"
+                                        >Title (required):</label
+                                    >
+                                    <input
+                                        type="text"
+                                        id="inline-title"
+                                        maxlength="50"
+                                        required
+                                    />
+                                    <small class="char-count"
+                                        ><span id="inline-title-count">0</span
+                                        >/50</small
+                                    >
+                                </div>
+                            </div>
+                            <div class="form-row selector-row">
+                                <div class="form-group mode-selector-group">
+                                    <label>Mode:</label>
+                                    <div class="mode-selector">
+                                        <button
+                                            type="button"
+                                            id="mode-point"
+                                            class="mode-btn point-btn"
+                                            title="Point Annotation"
+                                        >
+                                            <div
+                                                class="mode-icon point-icon"
+                                            ></div>
+                                            <span>Point</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            id="mode-area"
+                                            class="mode-btn area-btn active"
+                                            title="Area Annotation"
+                                        >
+                                            <div
+                                                class="mode-icon area-icon"
+                                            ></div>
+                                            <span>Area</span>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="form-group shape-selector-group">
+                                    <label>Shape:</label>
+                                    <div class="shape-selector">
+                                        <button
+                                            type="button"
+                                            id="shape-rectangle"
+                                            class="shape-btn rectangle-btn active"
+                                            title="Rectangle"
+                                        >
+                                            <div
+                                                class="shape-icon rectangle-icon"
+                                            ></div>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            id="shape-circle"
+                                            class="shape-btn circle-btn"
+                                            title="Circle"
+                                        >
+                                            <div
+                                                class="shape-icon circle-icon"
+                                            ></div>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="form-group type-selector-group">
+                                    <label>Type:</label>
+                                    <div
+                                        class="type-selector"
+                                        id="type-selector"
+                                    >
+                                        <!-- Type buttons will be populated by JavaScript -->
+                                    </div>
+                                </div>
+                            </div>
                             <div class="form-group">
-                                <label for="inline-title">Title (required):</label>
-                                <input type="text" id="inline-title" maxlength="50" required>
-                                <small class="char-count"><span id="inline-title-count">0</span>/50</small>
+                                <label for="inline-description"
+                                    >Description (supports HTML):</label
+                                >
+                                <textarea
+                                    id="inline-description"
+                                    maxlength="500"
+                                    rows="3"
+                                ></textarea>
+                                <small class="char-count"
+                                    ><span id="inline-desc-count">0</span
+                                    >/500</small
+                                >
+                                <small class="annotation-help"
+                                    >Allowed HTML tags: hr, br, b, strong, i,
+                                    em, u</small
+                                >
+                            </div>
+                            <div class="form-group">
+                                <label>Preview:</label>
+                                <div
+                                    id="inline-description-preview"
+                                    class="description-preview"
+                                ></div>
+                            </div>
+                            <button
+                                type="button"
+                                id="place-annotation-btn"
+                                disabled
+                            >
+                                📍 Place Annotation
+                            </button>
+                        </form>
+                    </div>
+
+                    <!-- Current Annotations List -->
+                    <div class="user-annotations-list">
+                        <div class="list-header">
+                            <h4>
+                                Current annotations (<span id="annotation-count"
+                                    >0</span
+                                >/10):
+                            </h4>
+                            <div class="list-controls desktop-only">
+                                <label class="edit-mode-toggle">
+                                    <input
+                                        type="checkbox"
+                                        id="edit-mode-checkbox"
+                                    />
+                                    <span class="checkmark"></span>
+                                    Edit Mode (enable drag & drop)
+                                </label>
                             </div>
                         </div>
-                        <div class="form-row selector-row">
-                            <div class="form-group mode-selector-group">
-                                <label>Mode:</label>
-                                <div class="mode-selector">
-                                    <button type="button" id="mode-point" class="mode-btn point-btn"
-                                        title="Point Annotation">
-                                        <div class="mode-icon point-icon"></div>
-                                        <span>Point</span>
-                                    </button>
-                                    <button type="button" id="mode-area" class="mode-btn area-btn active"
-                                        title="Area Annotation">
-                                        <div class="mode-icon area-icon"></div>
-                                        <span>Area</span>
-                                    </button>
-                                </div>
-                            </div>
-                            <div class="form-group shape-selector-group">
-                                <label>Shape:</label>
-                                <div class="shape-selector">
-                                    <button type="button" id="shape-rectangle" class="shape-btn rectangle-btn active"
-                                        title="Rectangle">
-                                        <div class="shape-icon rectangle-icon"></div>
-                                    </button>
-                                    <button type="button" id="shape-circle" class="shape-btn circle-btn" title="Circle">
-                                        <div class="shape-icon circle-icon"></div>
-                                    </button>
-                                </div>
-                            </div>
-                            <div class="form-group type-selector-group">
-                                <label>Type:</label>
-                                <div class="type-selector" id="type-selector">
-                                    <!-- Type buttons will be populated by JavaScript -->
-                                </div>
-                            </div>
+                        <div id="user-annotation-items"></div>
+                    </div>
+
+                    <!-- Modal Actions -->
+                    <div class="modal-actions">
+                        <button id="share-url-btn">📋 Copy Share URL</button>
+                        <button id="clear-all-annotations" class="danger-btn">
+                            🗑️ Clear All
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Edit Annotation Modal -->
+        <div id="edit-annotation-modal" class="modal" style="display: none">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Edit Annotation</h3>
+                    <button id="close-edit-modal" class="close-button">
+                        &times;
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <form id="edit-annotation-form">
+                        <div class="form-group">
+                            <label for="edit-title">Title (required):</label>
+                            <input
+                                type="text"
+                                id="edit-title"
+                                maxlength="50"
+                                required
+                            />
+                            <small class="char-count"
+                                ><span id="edit-title-count">0</span>/50</small
+                            >
                         </div>
                         <div class="form-group">
-                            <label for="inline-description">Description (supports HTML):</label>
-                            <textarea id="inline-description" maxlength="500" rows="3"></textarea>
-                            <small class="char-count"><span id="inline-desc-count">0</span>/500</small>
-                            <small class="annotation-help">Allowed HTML tags: hr, br, b, strong, i, em, u</small>
+                            <label for="edit-description"
+                                >Description (supports HTML):</label
+                            >
+                            <textarea
+                                id="edit-description"
+                                maxlength="500"
+                                rows="4"
+                            ></textarea>
+                            <small class="char-count"
+                                ><span id="edit-desc-count">0</span>/500</small
+                            >
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-type">Type:</label>
+                            <select id="edit-type" required></select>
                         </div>
                         <div class="form-group">
                             <label>Preview:</label>
-                            <div id="inline-description-preview" class="description-preview"></div>
+                            <div
+                                id="edit-description-preview"
+                                class="description-preview"
+                            ></div>
                         </div>
-                        <button type="button" id="place-annotation-btn" disabled>📍 Place Annotation</button>
+                        <div class="form-actions">
+                            <button type="submit">Save Changes</button>
+                            <button type="button" id="cancel-edit">
+                                Cancel
+                            </button>
+                        </div>
                     </form>
                 </div>
-
-                <!-- Current Annotations List -->
-                <div class="user-annotations-list">
-                    <div class="list-header">
-                        <h4>Current annotations (<span id="annotation-count">0</span>/10):</h4>
-                        <div class="list-controls desktop-only">
-                            <label class="edit-mode-toggle">
-                                <input type="checkbox" id="edit-mode-checkbox">
-                                <span class="checkmark"></span>
-                                Edit Mode (enable drag & drop)
-                            </label>
-                        </div>
-                    </div>
-                    <div id="user-annotation-items"></div>
-                </div>
-
-                <!-- Modal Actions -->
-                <div class="modal-actions">
-                    <button id="share-url-btn">📋 Copy Share URL</button>
-                    <button id="clear-all-annotations" class="danger-btn">🗑️ Clear All</button>
-                </div>
             </div>
         </div>
-    </div>
 
-    <!-- Edit Annotation Modal -->
-    <div id="edit-annotation-modal" class="modal" style="display: none;">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>Edit Annotation</h3>
-                <button id="close-edit-modal" class="close-button">&times;</button>
-            </div>
-            <div class="modal-body">
-                <form id="edit-annotation-form">
-                    <div class="form-group">
-                        <label for="edit-title">Title (required):</label>
-                        <input type="text" id="edit-title" maxlength="50" required>
-                        <small class="char-count"><span id="edit-title-count">0</span>/50</small>
-                    </div>
-                    <div class="form-group">
-                        <label for="edit-description">Description (supports HTML):</label>
-                        <textarea id="edit-description" maxlength="500" rows="4"></textarea>
-                        <small class="char-count"><span id="edit-desc-count">0</span>/500</small>
-                    </div>
-                    <div class="form-group">
-                        <label for="edit-type">Type:</label>
-                        <select id="edit-type" required>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Preview:</label>
-                        <div id="edit-description-preview" class="description-preview"></div>
-                    </div>
-                    <div class="form-actions">
-                        <button type="submit">Save Changes</button>
-                        <button type="button" id="cancel-edit">Cancel</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
-
-    <script src="data.js"></script>
-    <script src="script.js"></script>
-</body>
-
+        <script src="data.js"></script>
+        <script src="script.js"></script>
+    </body>
 </html>

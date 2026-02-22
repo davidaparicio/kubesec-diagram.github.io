@@ -8,12 +8,13 @@ window.createThemeService = function createThemeService(deps) {
       return saved;
     }
 
-    if (
-      window.matchMedia &&
-      window.matchMedia("(prefers-color-scheme: dark)").matches
-    ) {
-      return THEME_DARK;
-    }
+    //// Dark theme still too ugly to be default
+    // if (
+    //   window.matchMedia &&
+    //   window.matchMedia("(prefers-color-scheme: dark)").matches
+    // ) {
+    //   return THEME_DARK;
+    // }
 
     return THEME_LIGHT;
   }
