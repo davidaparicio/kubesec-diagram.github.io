@@ -1446,6 +1446,16 @@ window.createViewportInputService = function createViewportInputService(deps) {
     deps.scheduleMarkerPositioning(true);
   }
 
+  function handleDocumentTouchMove(e) {
+    if (!deps.getIsTouchActive()) return;
+    if (!e.touches || e.touches.length < 2) return;
+    if (e.cancelable) e.preventDefault();
+  }
+
+  function handleGestureEvent(e) {
+    if (e.cancelable) e.preventDefault();
+  }
+
   function initialize() {
     if (initialized) return;
     initialized = true;
@@ -1457,9 +1467,14 @@ window.createViewportInputService = function createViewportInputService(deps) {
     document.addEventListener("mousemove", handleMouseMove);
     document.addEventListener("mouseup", handleMouseUp);
 
-    deps.image.addEventListener("touchstart", handleTouchStart, { passive: false });
-    deps.image.addEventListener("touchmove", handleTouchMove, { passive: false });
-    deps.image.addEventListener("touchend", handleTouchEnd);
+    deps.wrapper.addEventListener("touchstart", handleTouchStart, { passive: false });
+    deps.wrapper.addEventListener("touchmove", handleTouchMove, { passive: false });
+    deps.wrapper.addEventListener("touchend", handleTouchEnd);
+
+    document.addEventListener("touchmove", handleDocumentTouchMove, { passive: false });
+    deps.wrapper.addEventListener("gesturestart", handleGestureEvent, { passive: false });
+    deps.wrapper.addEventListener("gesturechange", handleGestureEvent, { passive: false });
+    deps.wrapper.addEventListener("gestureend", handleGestureEvent, { passive: false });
   }
 
   return {
