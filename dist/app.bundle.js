@@ -1257,9 +1257,10 @@ window.createViewportService = function createViewportService(deps) {
 
 // ---- ./src/viewport-input.js ----
 window.createViewportInputService = function createViewportInputService(deps) {
-  let touchStartDistance = 0;
-  let touchStartZoom = 1;
-  let touchStartCenter = { x: 0, y: 0 };
+  let lastPinchDistance = 0;
+  let lastPinchCenter = { x: 0, y: 0 };
+  let isPinching = false;
+  let blockSingleTouchPan = false;
   let initialized = false;
 
   function handleResize() {
@@ -1509,11 +1510,13 @@ window.createViewportInputService = function createViewportInputService(deps) {
     deps.getImageBounds(true);
 
     if (e.touches.length === 2) {
-      touchStartDistance = getTouchDistance(e.touches);
-      touchStartZoom = deps.getCurrentZoom();
+      isPinching = true;
+      blockSingleTouchPan = false;
+      deps.setIsPanning(false);
+      lastPinchDistance = getTouchDistance(e.touches);
       const center = getTouchCenter(e.touches);
       const wrapperRect = deps.wrapper.getBoundingClientRect();
-      touchStartCenter = {
+      lastPinchCenter = {
         x: center.x - wrapperRect.left,
         y: center.y - wrapperRect.top,
       };
@@ -1521,7 +1524,7 @@ window.createViewportInputService = function createViewportInputService(deps) {
       return;
     }
 
-    if (e.touches.length === 1 && canPanAtCurrentZoom()) {
+    if (e.touches.length === 1 && !blockSingleTouchPan && canPanAtCurrentZoom()) {
       deps.setIsPanning(true);
       deps.setPanStartX(e.touches[0].clientX - deps.getImageTranslateX());
       deps.setPanStartY(e.touches[0].clientY - deps.getImageTranslateY());
@@ -1539,15 +1542,27 @@ window.createViewportInputService = function createViewportInputService(deps) {
     }
 
     if (e.touches.length === 2) {
+      if (!isPinching) {
+        isPinching = true;
+        deps.setIsPanning(false);
+        lastPinchDistance = getTouchDistance(e.touches);
+        const center = getTouchCenter(e.touches);
+        const wrapperRectInit = deps.wrapper.getBoundingClientRect();
+        lastPinchCenter = {
+          x: center.x - wrapperRectInit.left,
+          y: center.y - wrapperRectInit.top,
+        };
+      }
+
       const currentDistance = getTouchDistance(e.touches);
       const currentCenter = getTouchCenter(e.touches);
       const imageRectBeforeZoom = deps.image.getBoundingClientRect();
 
-      const distanceRatio = currentDistance / touchStartDistance;
-      const zoomFactor = Math.max(0.5, Math.min(2.0, distanceRatio));
+      const safeLastDistance = lastPinchDistance > 0 ? lastPinchDistance : currentDistance;
+      const distanceRatio = currentDistance / safeLastDistance;
       const newZoom = Math.max(
         deps.getMinZoom(),
-        Math.min(deps.getMaxZoom(), touchStartZoom * zoomFactor),
+        Math.min(deps.getMaxZoom(), deps.getCurrentZoom() * distanceRatio),
       );
 
       const wrapperRect = deps.wrapper.getBoundingClientRect();
@@ -1561,21 +1576,35 @@ window.createViewportInputService = function createViewportInputService(deps) {
       const oldZoom = deps.getCurrentZoom();
       deps.setCurrentZoom(newZoom);
 
-      const targetX = (centerX - imageLeftOnWrapper) / oldZoom;
-      const targetY = (centerY - imageTopOnWrapper) / oldZoom;
+      if (Math.abs(deps.getCurrentZoom() - oldZoom) > 0.0001) {
+        const targetX = (centerX - imageLeftOnWrapper) / oldZoom;
+        const targetY = (centerY - imageTopOnWrapper) / oldZoom;
 
-      deps.setImageTranslateX(
-        centerX - imageBaseLeftOnWrapper - targetX * deps.getCurrentZoom(),
-      );
-      deps.setImageTranslateY(
-        centerY - imageBaseTopOnWrapper - targetY * deps.getCurrentZoom(),
-      );
+        deps.setImageTranslateX(
+          centerX - imageBaseLeftOnWrapper - targetX * deps.getCurrentZoom(),
+        );
+        deps.setImageTranslateY(
+          centerY - imageBaseTopOnWrapper - targetY * deps.getCurrentZoom(),
+        );
+      } else {
+        const deltaX = centerX - lastPinchCenter.x;
+        const deltaY = centerY - lastPinchCenter.y;
+        deps.setImageTranslateX(deps.getImageTranslateX() + deltaX);
+        deps.setImageTranslateY(deps.getImageTranslateY() + deltaY);
+      }
 
       if (deps.getCurrentZoom() < deps.getMinZoom()) {
         deps.setCurrentZoom(deps.getMinZoom());
       }
 
       deps.updateImageTransform();
+      lastPinchDistance = currentDistance;
+      lastPinchCenter = { x: centerX, y: centerY };
+      if (e.cancelable) e.preventDefault();
+      return;
+    }
+
+    if (e.touches.length === 1 && blockSingleTouchPan) {
       if (e.cancelable) e.preventDefault();
       return;
     }
@@ -1599,11 +1628,35 @@ window.createViewportInputService = function createViewportInputService(deps) {
       return;
     }
 
+    if (e.touches.length === 1 && isPinching) {
+      isPinching = false;
+      blockSingleTouchPan = true;
+      deps.setIsPanning(false);
+      lastPinchDistance = 0;
+      if (e.cancelable) e.preventDefault();
+      return;
+    }
+
+    if (e.touches.length === 2) {
+      isPinching = true;
+      deps.setIsPanning(false);
+      lastPinchDistance = getTouchDistance(e.touches);
+      const center = getTouchCenter(e.touches);
+      const wrapperRect = deps.wrapper.getBoundingClientRect();
+      lastPinchCenter = {
+        x: center.x - wrapperRect.left,
+        y: center.y - wrapperRect.top,
+      };
+      return;
+    }
+
     if (e.touches.length !== 0) return;
 
     deps.setIsPanning(false);
-    touchStartDistance = 0;
-    touchStartCenter = { x: 0, y: 0 };
+    isPinching = false;
+    blockSingleTouchPan = false;
+    lastPinchDistance = 0;
+    lastPinchCenter = { x: 0, y: 0 };
 
     deps.setIsTouchActive(false);
     deps.setCachedBounds(null);
