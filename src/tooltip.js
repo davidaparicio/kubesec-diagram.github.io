@@ -1,5 +1,7 @@
 window.createTooltipService = function createTooltipService(deps) {
   let currentMobileTooltip = null;
+  let mobileTooltipOriginalParent = null;
+  let mobileTooltipNextSibling = null;
   let initialized = false;
 
   function isMobileDevice() {
@@ -31,7 +33,14 @@ window.createTooltipService = function createTooltipService(deps) {
     const sanitizedContent = normalizeContent(content);
     const isSmallScreen = window.innerWidth <= 768;
 
+    if (isSmallScreen && tooltip.parentElement !== document.body) {
+      mobileTooltipOriginalParent = tooltip.parentElement;
+      mobileTooltipNextSibling = tooltip.nextSibling;
+      document.body.appendChild(tooltip);
+    }
+
     tooltip.classList.add("mobile-tooltip");
+    document.body.classList.add("mobile-tooltip-open");
     tooltip.innerHTML = sanitizedContent;
     tooltip.style.display = "block";
 
@@ -93,6 +102,7 @@ window.createTooltipService = function createTooltipService(deps) {
     if (currentMobileTooltip) {
       currentMobileTooltip.style.display = "none";
       currentMobileTooltip.classList.remove("mobile-tooltip");
+      document.body.classList.remove("mobile-tooltip-open");
       currentMobileTooltip.style.removeProperty("position");
       currentMobileTooltip.style.removeProperty("transform");
       currentMobileTooltip.style.removeProperty("width");
@@ -102,8 +112,23 @@ window.createTooltipService = function createTooltipService(deps) {
       currentMobileTooltip.style.removeProperty("overflow-y");
       currentMobileTooltip.style.removeProperty("left");
       currentMobileTooltip.style.removeProperty("top");
+
+      if (mobileTooltipOriginalParent) {
+        if (mobileTooltipNextSibling && mobileTooltipNextSibling.parentNode === mobileTooltipOriginalParent) {
+          mobileTooltipOriginalParent.insertBefore(currentMobileTooltip, mobileTooltipNextSibling);
+        } else {
+          mobileTooltipOriginalParent.appendChild(currentMobileTooltip);
+        }
+      }
+
+      mobileTooltipOriginalParent = null;
+      mobileTooltipNextSibling = null;
       currentMobileTooltip = null;
       window.currentMobileTooltip = null;
+    }
+
+    if (!currentMobileTooltip) {
+      document.body.classList.remove("mobile-tooltip-open");
     }
 
     document.removeEventListener("touchstart", handleMobileTooltipOutsideClick, true);

@@ -101,14 +101,29 @@ window.createSvgHelpService = function createSvgHelpService(deps) {
       const tags = deps.parseTags(targetEl.getAttribute("data-tags"));
       const tooltipTags = deps.buildTagBadgesHtml(tags);
       const pinActionHtml = slug
-        ? '<div class="tooltip-actions"><button type="button" class="tooltip-pin-btn" data-role="tooltip-pin" aria-pressed="false" title="Pin">📌 Pin</button></div>'
+        ? '<button type="button" class="tooltip-pin-btn" data-role="tooltip-pin" aria-pressed="false" title="Pin">📌 Pin</button>'
+        : "";
+      const footerParts = [];
+      if (tooltipTags) {
+        footerParts.push(`<div class="tooltip-tag-wrap">${tooltipTags}</div>`);
+      }
+      if (pinActionHtml) {
+        footerParts.push(pinActionHtml);
+      }
+      const tooltipFooterHtml = footerParts.length
+        ? `<div class="tooltip-actions">${footerParts.join("")}</div>`
         : "";
       tooltip.className = `tooltip-box svg-property-tooltip ${deps.getSeverityClassForTags(tags)}`;
-      tooltip.innerHTML = `<div class="tooltip-head">${tooltipTags}<b>${deps.escapeHTML(parsedHelp.title)}</b></div><div class="tooltip-content">${parsedHelp.bodyHtml || ""}</div>${pinActionHtml}`;
+      tooltip.innerHTML = `<div class="tooltip-head"><b>${deps.escapeHTML(parsedHelp.title)}</b></div><div class="tooltip-content">${parsedHelp.bodyHtml || ""}</div>${tooltipFooterHtml}`;
       deps.applySeverityStyleToElement(tooltip, tags);
       tooltip.style.display = "none";
       tooltip.style.whiteSpace = "pre-wrap";
       deps.tooltipLayer.appendChild(tooltip);
+
+      const tooltipTagBadges = tooltip.querySelector(".annotation-tag-badges");
+      if (tooltipTagBadges) {
+        tooltipTagBadges.classList.add("tooltip-tag-badges");
+      }
 
       targetEl.style.cursor = "pointer";
       targetEl.style.opacity = "0";
@@ -161,8 +176,11 @@ window.createSvgHelpService = function createSvgHelpService(deps) {
       });
 
       tooltip.addEventListener("mouseenter", () => clearTimeout(hideTimeout));
-      tooltip.addEventListener("click", (event) => {
-        const pinBtn = event.target.closest('[data-role="tooltip-pin"]');
+      const onTooltipPinInteraction = (event) => {
+        const eventTarget = event.target instanceof Element ? event.target : null;
+        const pinBtn = eventTarget
+          ? eventTarget.closest('[data-role="tooltip-pin"]')
+          : null;
         if (!pinBtn) return;
         event.preventDefault();
         event.stopPropagation();
@@ -171,7 +189,10 @@ window.createSvgHelpService = function createSvgHelpService(deps) {
         deps.togglePinnedSlug(slug);
         applyPinnedVisualState(targetEl);
         deps.applyAnnotationFilter();
-      });
+      };
+
+      tooltip.addEventListener("click", onTooltipPinInteraction);
+      tooltip.addEventListener("touchend", onTooltipPinInteraction, { passive: false });
       tooltip.addEventListener("mouseleave", () => {
         hideTimeout = setTimeout(() => {
           tooltip.style.display = "none";

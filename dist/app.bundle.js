@@ -542,6 +542,8 @@ window.createTagControlsService = function createTagControlsService(deps) {
 // ---- ./src/tooltip.js ----
 window.createTooltipService = function createTooltipService(deps) {
   let currentMobileTooltip = null;
+  let mobileTooltipOriginalParent = null;
+  let mobileTooltipNextSibling = null;
   let initialized = false;
 
   function isMobileDevice() {
@@ -573,7 +575,14 @@ window.createTooltipService = function createTooltipService(deps) {
     const sanitizedContent = normalizeContent(content);
     const isSmallScreen = window.innerWidth <= 768;
 
+    if (isSmallScreen && tooltip.parentElement !== document.body) {
+      mobileTooltipOriginalParent = tooltip.parentElement;
+      mobileTooltipNextSibling = tooltip.nextSibling;
+      document.body.appendChild(tooltip);
+    }
+
     tooltip.classList.add("mobile-tooltip");
+    document.body.classList.add("mobile-tooltip-open");
     tooltip.innerHTML = sanitizedContent;
     tooltip.style.display = "block";
 
@@ -635,6 +644,7 @@ window.createTooltipService = function createTooltipService(deps) {
     if (currentMobileTooltip) {
       currentMobileTooltip.style.display = "none";
       currentMobileTooltip.classList.remove("mobile-tooltip");
+      document.body.classList.remove("mobile-tooltip-open");
       currentMobileTooltip.style.removeProperty("position");
       currentMobileTooltip.style.removeProperty("transform");
       currentMobileTooltip.style.removeProperty("width");
@@ -644,8 +654,23 @@ window.createTooltipService = function createTooltipService(deps) {
       currentMobileTooltip.style.removeProperty("overflow-y");
       currentMobileTooltip.style.removeProperty("left");
       currentMobileTooltip.style.removeProperty("top");
+
+      if (mobileTooltipOriginalParent) {
+        if (mobileTooltipNextSibling && mobileTooltipNextSibling.parentNode === mobileTooltipOriginalParent) {
+          mobileTooltipOriginalParent.insertBefore(currentMobileTooltip, mobileTooltipNextSibling);
+        } else {
+          mobileTooltipOriginalParent.appendChild(currentMobileTooltip);
+        }
+      }
+
+      mobileTooltipOriginalParent = null;
+      mobileTooltipNextSibling = null;
       currentMobileTooltip = null;
       window.currentMobileTooltip = null;
+    }
+
+    if (!currentMobileTooltip) {
+      document.body.classList.remove("mobile-tooltip-open");
     }
 
     document.removeEventListener("touchstart", handleMobileTooltipOutsideClick, true);
@@ -1096,11 +1121,6 @@ window.createViewportService = function createViewportService(deps) {
     }
 
     const currentZoom = deps.getCurrentZoom();
-    if (currentZoom <= 1) {
-      deps.setImageTranslateX(0);
-      deps.setImageTranslateY(0);
-      return;
-    }
 
     let imageTranslateX = deps.getImageTranslateX();
     let imageTranslateY = deps.getImageTranslateY();
@@ -1112,12 +1132,16 @@ window.createViewportService = function createViewportService(deps) {
       const minX = viewportWidth - scaledWidth;
       const maxX = 0;
       imageTranslateX = Math.max(minX, Math.min(imageTranslateX, maxX));
+    } else {
+      imageTranslateX = 0;
     }
 
     if (scaledHeight > viewportHeight) {
       const minY = viewportHeight - scaledHeight;
       const maxY = 0;
       imageTranslateY = Math.max(minY, Math.min(imageTranslateY, maxY));
+    } else {
+      imageTranslateY = 0;
     }
 
     deps.setImageTranslateX(imageTranslateX);
@@ -1199,7 +1223,25 @@ window.createViewportService = function createViewportService(deps) {
     const imageTranslateX = deps.getImageTranslateX();
     const imageTranslateY = deps.getImageTranslateY();
     deps.image.style.transform = `matrix(${currentZoom}, 0, 0, ${currentZoom}, ${imageTranslateX}, ${imageTranslateY})`;
-    deps.image.style.cursor = currentZoom > 1 ? "grab" : "default";
+    const displayedWidth = deps.image.offsetWidth || deps.image.clientWidth;
+    const displayedHeight = deps.image.offsetHeight || deps.image.clientHeight;
+    const wrapperStyles = window.getComputedStyle(deps.wrapper);
+    const padLeft = Number.parseFloat(wrapperStyles.paddingLeft) || 0;
+    const padRight = Number.parseFloat(wrapperStyles.paddingRight) || 0;
+    const padTop = Number.parseFloat(wrapperStyles.paddingTop) || 0;
+    const padBottom = Number.parseFloat(wrapperStyles.paddingBottom) || 0;
+    const viewportWidth = Math.max(
+      1,
+      (deps.wrapper.clientWidth || window.innerWidth) - padLeft - padRight,
+    );
+    const viewportHeight = Math.max(
+      1,
+      (deps.wrapper.clientHeight || window.innerHeight) - padTop - padBottom,
+    );
+    const canPan =
+      displayedWidth * currentZoom > viewportWidth ||
+      displayedHeight * currentZoom > viewportHeight;
+    deps.image.style.cursor = canPan ? "grab" : "default";
 
     deps.scheduleMarkerPositioning(deps.getIsTouchActive());
   }
@@ -1243,7 +1285,38 @@ window.createViewportInputService = function createViewportInputService(deps) {
     }
   }
 
+  function isViewportLockedByMobileTooltip() {
+    if (document.body.classList.contains("mobile-tooltip-open")) {
+      return true;
+    }
+
+    const mobileTooltip = window.currentMobileTooltip;
+    return Boolean(
+      mobileTooltip &&
+      mobileTooltip.style &&
+      mobileTooltip.style.display !== "none",
+    );
+  }
+
   function handleWheel(e) {
+    if (isViewportLockedByMobileTooltip()) {
+      const mobileTooltip = window.currentMobileTooltip;
+      const rawTarget = e && e.target;
+      const target =
+        rawTarget && rawTarget.nodeType === 1
+          ? rawTarget
+          : rawTarget && rawTarget.parentElement
+            ? rawTarget.parentElement
+            : null;
+      const insideMobileTooltip =
+        mobileTooltip &&
+        target &&
+        mobileTooltip.contains(target);
+
+      if (!insideMobileTooltip && e.cancelable) e.preventDefault();
+      return;
+    }
+
     if (typeof deps.shouldIgnoreWheelEvent === "function" && deps.shouldIgnoreWheelEvent(e)) {
       return;
     }
@@ -1302,15 +1375,15 @@ window.createViewportInputService = function createViewportInputService(deps) {
       anchorYOnWrapper - imageBaseTopOnWrapper - targetY * currentZoom,
     );
 
-    if (deps.getCurrentZoom() <= 1) {
-      deps.setCurrentZoom(1);
-      deps.centerImageAtCurrentZoom();
+    if (deps.getCurrentZoom() < deps.getMinZoom()) {
+      deps.setCurrentZoom(deps.getMinZoom());
     }
 
     deps.updateImageTransform();
   }
 
   function handleMouseDown(e) {
+    if (isViewportLockedByMobileTooltip()) return;
     if (deps.getCurrentZoom() <= 1) return;
     if (e.button !== 0) return;
     if (!deps.image.contains(e.target)) return;
@@ -1324,6 +1397,7 @@ window.createViewportInputService = function createViewportInputService(deps) {
   }
 
   function handleMouseMove(e) {
+    if (isViewportLockedByMobileTooltip()) return;
     if (!deps.getIsPanning()) return;
 
     deps.setImageTranslateX(e.clientX - deps.getPanStartX());
@@ -1334,6 +1408,13 @@ window.createViewportInputService = function createViewportInputService(deps) {
   }
 
   function handleMouseUp(e) {
+    if (isViewportLockedByMobileTooltip()) {
+      if (deps.getIsPanning()) {
+        deps.setIsPanning(false);
+      }
+      return;
+    }
+
     if (!deps.getIsPanning()) return;
 
     deps.setIsPanning(false);
@@ -1355,7 +1436,73 @@ window.createViewportInputService = function createViewportInputService(deps) {
     };
   }
 
+  function canPanAtCurrentZoom() {
+    const currentZoom = deps.getCurrentZoom();
+    const displayedWidth = deps.image.offsetWidth || deps.image.clientWidth;
+    const displayedHeight = deps.image.offsetHeight || deps.image.clientHeight;
+    const wrapperStyles = window.getComputedStyle(deps.wrapper);
+    const padLeft = Number.parseFloat(wrapperStyles.paddingLeft) || 0;
+    const padRight = Number.parseFloat(wrapperStyles.paddingRight) || 0;
+    const padTop = Number.parseFloat(wrapperStyles.paddingTop) || 0;
+    const padBottom = Number.parseFloat(wrapperStyles.paddingBottom) || 0;
+    const viewportWidth = Math.max(
+      1,
+      (deps.wrapper.clientWidth || window.innerWidth) - padLeft - padRight,
+    );
+    const viewportHeight = Math.max(
+      1,
+      (deps.wrapper.clientHeight || window.innerHeight) - padTop - padBottom,
+    );
+
+    return (
+      displayedWidth * currentZoom > viewportWidth ||
+      displayedHeight * currentZoom > viewportHeight
+    );
+  }
+
+  function shouldIgnoreTouchEvent(e) {
+    const rawTarget = e && e.target;
+    const target =
+      rawTarget && typeof rawTarget.closest === "function"
+        ? rawTarget
+        : rawTarget && rawTarget.parentElement && typeof rawTarget.parentElement.closest === "function"
+          ? rawTarget.parentElement
+          : null;
+
+    const mobileTooltip = window.currentMobileTooltip;
+    if (
+      mobileTooltip &&
+      mobileTooltip.style &&
+      mobileTooltip.style.display !== "none" &&
+      target &&
+      mobileTooltip.contains(target)
+    ) {
+      return true;
+    }
+
+    if (!target || typeof target.closest !== "function") return false;
+
+    return Boolean(
+      target.closest(".tooltip-box") ||
+      target.closest("#filter-panel") ||
+      target.closest("#user-annotations-modal") ||
+      target.closest("#edit-annotation-modal"),
+    );
+  }
+
   function handleTouchStart(e) {
+    if (isViewportLockedByMobileTooltip()) {
+      deps.setIsPanning(false);
+      deps.setIsTouchActive(false);
+      return;
+    }
+
+    if (shouldIgnoreTouchEvent(e)) {
+      deps.setIsPanning(false);
+      deps.setIsTouchActive(false);
+      return;
+    }
+
     deps.setIsTouchActive(true);
 
     deps.setCachedBounds(null);
@@ -1374,7 +1521,7 @@ window.createViewportInputService = function createViewportInputService(deps) {
       return;
     }
 
-    if (e.touches.length === 1 && deps.getCurrentZoom() > 1) {
+    if (e.touches.length === 1 && canPanAtCurrentZoom()) {
       deps.setIsPanning(true);
       deps.setPanStartX(e.touches[0].clientX - deps.getImageTranslateX());
       deps.setPanStartY(e.touches[0].clientY - deps.getImageTranslateY());
@@ -1383,6 +1530,14 @@ window.createViewportInputService = function createViewportInputService(deps) {
   }
 
   function handleTouchMove(e) {
+    if (isViewportLockedByMobileTooltip()) {
+      return;
+    }
+
+    if (shouldIgnoreTouchEvent(e)) {
+      return;
+    }
+
     if (e.touches.length === 2) {
       const currentDistance = getTouchDistance(e.touches);
       const currentCenter = getTouchCenter(e.touches);
@@ -1416,9 +1571,8 @@ window.createViewportInputService = function createViewportInputService(deps) {
         centerY - imageBaseTopOnWrapper - targetY * deps.getCurrentZoom(),
       );
 
-      if (deps.getCurrentZoom() <= 1) {
-        deps.setCurrentZoom(1);
-        deps.centerImageAtCurrentZoom();
+      if (deps.getCurrentZoom() < deps.getMinZoom()) {
+        deps.setCurrentZoom(deps.getMinZoom());
       }
 
       deps.updateImageTransform();
@@ -1435,6 +1589,16 @@ window.createViewportInputService = function createViewportInputService(deps) {
   }
 
   function handleTouchEnd(e) {
+    if (isViewportLockedByMobileTooltip()) {
+      deps.setIsPanning(false);
+      deps.setIsTouchActive(false);
+      return;
+    }
+
+    if (shouldIgnoreTouchEvent(e)) {
+      return;
+    }
+
     if (e.touches.length !== 0) return;
 
     deps.setIsPanning(false);
@@ -1447,6 +1611,10 @@ window.createViewportInputService = function createViewportInputService(deps) {
   }
 
   function handleDocumentTouchMove(e) {
+    if (isViewportLockedByMobileTooltip()) {
+      return;
+    }
+
     if (!deps.getIsTouchActive()) return;
     if (!e.touches || e.touches.length < 2) return;
     if (e.cancelable) e.preventDefault();
@@ -2042,6 +2210,13 @@ window.createFilterResultsService = function createFilterResultsService(deps) {
     return `Hidden because tags ${quoted} are filtered out.`;
   }
 
+  function shouldUseGoToNavigation() {
+    if (typeof deps.isMobileDevice !== "function") return false;
+    if (typeof deps.getFilterPanelOpen !== "function") return false;
+
+    return deps.isMobileDevice() && deps.getFilterPanelOpen();
+  }
+
   function createResultItem(record, options = {}) {
     const inactive = Boolean(options.inactive);
     const hiddenReason = inactive ? formatHiddenReason(options.hiddenTags) : "";
@@ -2069,13 +2244,70 @@ window.createFilterResultsService = function createFilterResultsService(deps) {
     const hiddenStateHtml = inactive
       ? `<div class="filter-result-state" role="note" aria-live="polite">${deps.escapeHTML(hiddenReason)}</div>`
       : "";
-    const actionsHtml =
-      hiddenStateHtml || pinButtonHtml
-        ? `<div class="filter-result-actions">${hiddenStateHtml}${pinButtonHtml}</div>`
+    const tagsFooterHtml = tagsHtml ? `<div class="filter-result-tags">${tagsHtml}</div>` : "";
+    const actionsRowHtml =
+      tagsFooterHtml || pinButtonHtml
+        ? `<div class="filter-result-actions-row">${tagsFooterHtml}${pinButtonHtml}</div>`
         : "";
-    item.innerHTML = `<div class="filter-result-head">${tagsHtml}<strong>${deps.escapeHTML(record.title || "Help")}</strong></div><div class="filter-result-content">${record.bodyHtml || "Help annotation"}</div>${actionsHtml}`;
-    if (!inactive) {
+    const actionsHtml =
+      hiddenStateHtml || actionsRowHtml
+        ? `<div class="filter-result-actions">${hiddenStateHtml}${actionsRowHtml}</div>`
+        : "";
+    item.innerHTML = `<div class="filter-result-head"><strong>${deps.escapeHTML(record.title || "Help")}</strong></div><div class="filter-result-content">${record.bodyHtml || "Help annotation"}</div>${actionsHtml}`;
+    const useGoToNavigation = shouldUseGoToNavigation();
+
+    if (!inactive && !useGoToNavigation) {
       deps.bindResultHighlight(item, record);
+    }
+
+    if (!inactive && typeof deps.goToHelpRecord === "function") {
+      let touchStartX = 0;
+      let touchStartY = 0;
+      let touchMoved = false;
+      let suppressClickUntil = 0;
+      const TAP_MOVE_THRESHOLD_PX = 10;
+
+      const onTouchStart = (event) => {
+        const touch = event.touches && event.touches[0];
+        if (!touch) return;
+        touchStartX = touch.clientX;
+        touchStartY = touch.clientY;
+        touchMoved = false;
+      };
+
+      const onTouchMove = (event) => {
+        const touch = event.touches && event.touches[0];
+        if (!touch) return;
+        const dx = Math.abs(touch.clientX - touchStartX);
+        const dy = Math.abs(touch.clientY - touchStartY);
+        if (dx > TAP_MOVE_THRESHOLD_PX || dy > TAP_MOVE_THRESHOLD_PX) {
+          touchMoved = true;
+          suppressClickUntil = Date.now() + 450;
+        }
+      };
+
+      const runGoTo = (event) => {
+        if (!shouldUseGoToNavigation()) return;
+
+        if (event.type === "click" && Date.now() < suppressClickUntil) {
+          return;
+        }
+
+        if (event.type === "touchend" && touchMoved) {
+          return;
+        }
+
+        const clickTarget = event.target instanceof Element ? event.target : null;
+        if (clickTarget && clickTarget.closest('[data-role="pin"]')) return;
+        if (event.cancelable) event.preventDefault();
+        event.stopPropagation();
+        deps.goToHelpRecord(record);
+      };
+
+      item.addEventListener("touchstart", onTouchStart, { passive: true });
+      item.addEventListener("touchmove", onTouchMove, { passive: true });
+      item.addEventListener("click", runGoTo);
+      item.addEventListener("touchend", runGoTo, { passive: false });
     }
 
     if (slug.length > 0) {
@@ -4176,14 +4408,29 @@ window.createSvgHelpService = function createSvgHelpService(deps) {
       const tags = deps.parseTags(targetEl.getAttribute("data-tags"));
       const tooltipTags = deps.buildTagBadgesHtml(tags);
       const pinActionHtml = slug
-        ? '<div class="tooltip-actions"><button type="button" class="tooltip-pin-btn" data-role="tooltip-pin" aria-pressed="false" title="Pin">📌 Pin</button></div>'
+        ? '<button type="button" class="tooltip-pin-btn" data-role="tooltip-pin" aria-pressed="false" title="Pin">📌 Pin</button>'
+        : "";
+      const footerParts = [];
+      if (tooltipTags) {
+        footerParts.push(`<div class="tooltip-tag-wrap">${tooltipTags}</div>`);
+      }
+      if (pinActionHtml) {
+        footerParts.push(pinActionHtml);
+      }
+      const tooltipFooterHtml = footerParts.length
+        ? `<div class="tooltip-actions">${footerParts.join("")}</div>`
         : "";
       tooltip.className = `tooltip-box svg-property-tooltip ${deps.getSeverityClassForTags(tags)}`;
-      tooltip.innerHTML = `<div class="tooltip-head">${tooltipTags}<b>${deps.escapeHTML(parsedHelp.title)}</b></div><div class="tooltip-content">${parsedHelp.bodyHtml || ""}</div>${pinActionHtml}`;
+      tooltip.innerHTML = `<div class="tooltip-head"><b>${deps.escapeHTML(parsedHelp.title)}</b></div><div class="tooltip-content">${parsedHelp.bodyHtml || ""}</div>${tooltipFooterHtml}`;
       deps.applySeverityStyleToElement(tooltip, tags);
       tooltip.style.display = "none";
       tooltip.style.whiteSpace = "pre-wrap";
       deps.tooltipLayer.appendChild(tooltip);
+
+      const tooltipTagBadges = tooltip.querySelector(".annotation-tag-badges");
+      if (tooltipTagBadges) {
+        tooltipTagBadges.classList.add("tooltip-tag-badges");
+      }
 
       targetEl.style.cursor = "pointer";
       targetEl.style.opacity = "0";
@@ -4236,8 +4483,11 @@ window.createSvgHelpService = function createSvgHelpService(deps) {
       });
 
       tooltip.addEventListener("mouseenter", () => clearTimeout(hideTimeout));
-      tooltip.addEventListener("click", (event) => {
-        const pinBtn = event.target.closest('[data-role="tooltip-pin"]');
+      const onTooltipPinInteraction = (event) => {
+        const eventTarget = event.target instanceof Element ? event.target : null;
+        const pinBtn = eventTarget
+          ? eventTarget.closest('[data-role="tooltip-pin"]')
+          : null;
         if (!pinBtn) return;
         event.preventDefault();
         event.stopPropagation();
@@ -4246,7 +4496,10 @@ window.createSvgHelpService = function createSvgHelpService(deps) {
         deps.togglePinnedSlug(slug);
         applyPinnedVisualState(targetEl);
         deps.applyAnnotationFilter();
-      });
+      };
+
+      tooltip.addEventListener("click", onTooltipPinInteraction);
+      tooltip.addEventListener("touchend", onTooltipPinInteraction, { passive: false });
       tooltip.addEventListener("mouseleave", () => {
         hideTimeout = setTimeout(() => {
           tooltip.style.display = "none";
@@ -4499,6 +4752,96 @@ function onFilterConstraintStateChanged() {
     svgHelpService.refreshPinnedStates();
   }
   urlStateService.updateURLState();
+}
+
+function isRectValid(rect) {
+  return (
+    rect &&
+    Number.isFinite(rect.left) &&
+    Number.isFinite(rect.top) &&
+    Number.isFinite(rect.width) &&
+    Number.isFinite(rect.height) &&
+    rect.width > 0 &&
+    rect.height > 0
+  );
+}
+
+function pulseGoToElement(element) {
+  if (!element || typeof element.getBoundingClientRect !== "function") return;
+
+  const rect = element.getBoundingClientRect();
+  if (!isRectValid(rect)) return;
+
+  if (element._mobileGoToPulseEl && element._mobileGoToPulseEl.parentNode) {
+    element._mobileGoToPulseEl.parentNode.removeChild(element._mobileGoToPulseEl);
+    element._mobileGoToPulseEl = null;
+  }
+
+  if (element._mobileGoToPulseTimeout) {
+    clearTimeout(element._mobileGoToPulseTimeout);
+    element._mobileGoToPulseTimeout = null;
+  }
+
+  const indicator = document.createElement("div");
+  indicator.className = "mobile-go-to-indicator";
+  const size = Math.max(22, Math.min(60, Math.max(rect.width, rect.height) * 1.35));
+  indicator.style.width = `${Math.round(size)}px`;
+  indicator.style.height = `${Math.round(size)}px`;
+  indicator.style.left = `${Math.round(rect.left + rect.width / 2)}px`;
+  indicator.style.top = `${Math.round(rect.top + rect.height / 2)}px`;
+  document.body.appendChild(indicator);
+  element._mobileGoToPulseEl = indicator;
+
+  element._mobileGoToPulseTimeout = setTimeout(() => {
+    if (indicator.parentNode) {
+      indicator.parentNode.removeChild(indicator);
+    }
+    if (element._mobileGoToPulseEl === indicator) {
+      element._mobileGoToPulseEl = null;
+    }
+    element._mobileGoToPulseTimeout = null;
+  }, 700);
+}
+
+function focusHelpRecord(record) {
+  if (!record || !record.element || typeof record.element.getBoundingClientRect !== "function") {
+    return;
+  }
+
+  const targetZoom = Math.min(maxZoom, Math.max(currentZoom, 2));
+  currentZoom = targetZoom;
+  viewportService.updateImageTransform();
+
+  const wrapperRect = wrapper.getBoundingClientRect();
+  const targetRect = record.element.getBoundingClientRect();
+  if (!isRectValid(wrapperRect) || !isRectValid(targetRect)) {
+    return;
+  }
+
+  const viewportCenterX = wrapperRect.left + wrapperRect.width / 2;
+  const viewportCenterY = wrapperRect.top + wrapperRect.height / 2;
+  const targetCenterX = targetRect.left + targetRect.width / 2;
+  const targetCenterY = targetRect.top + targetRect.height / 2;
+
+  imageTranslateX += viewportCenterX - targetCenterX;
+  imageTranslateY += viewportCenterY - targetCenterY;
+  viewportService.updateImageTransform();
+}
+
+function goToHelpRecord(record) {
+  if (!record || !record.element) return;
+
+  if (filterPanelOpen) {
+    filterPanelStateService.setFilterPanelOpen(false);
+  }
+
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      viewportService.syncDiagramSize();
+      focusHelpRecord(record);
+      pulseGoToElement(record.element);
+    });
+  });
 }
 
 function togglePinnedHelpSlug(slugValue) {
@@ -4803,6 +5146,10 @@ const filterResultsService = window.createFilterResultsService({
   clearFilterHighlight: () => filterHighlightService.clear(),
   bindResultHighlight: (item, record) =>
     filterHighlightService.bindResultHighlight(item, record),
+  isMobileDevice: () => tooltipService.isMobileDevice(),
+  getFilterPanelOpen: () => filterPanelOpen,
+  getFilterPanelOverlayMode: () => filterPanelOverlayMode,
+  goToHelpRecord,
   updateSvgElementVisibility: (element) =>
     svgHelpService.updateSvgElementVisibility(element),
   updateFilterResultSummary: (helpVisible, helpTotal, query) => {

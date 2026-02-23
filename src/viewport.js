@@ -55,11 +55,6 @@ window.createViewportService = function createViewportService(deps) {
     }
 
     const currentZoom = deps.getCurrentZoom();
-    if (currentZoom <= 1) {
-      deps.setImageTranslateX(0);
-      deps.setImageTranslateY(0);
-      return;
-    }
 
     let imageTranslateX = deps.getImageTranslateX();
     let imageTranslateY = deps.getImageTranslateY();
@@ -71,12 +66,16 @@ window.createViewportService = function createViewportService(deps) {
       const minX = viewportWidth - scaledWidth;
       const maxX = 0;
       imageTranslateX = Math.max(minX, Math.min(imageTranslateX, maxX));
+    } else {
+      imageTranslateX = 0;
     }
 
     if (scaledHeight > viewportHeight) {
       const minY = viewportHeight - scaledHeight;
       const maxY = 0;
       imageTranslateY = Math.max(minY, Math.min(imageTranslateY, maxY));
+    } else {
+      imageTranslateY = 0;
     }
 
     deps.setImageTranslateX(imageTranslateX);
@@ -158,7 +157,25 @@ window.createViewportService = function createViewportService(deps) {
     const imageTranslateX = deps.getImageTranslateX();
     const imageTranslateY = deps.getImageTranslateY();
     deps.image.style.transform = `matrix(${currentZoom}, 0, 0, ${currentZoom}, ${imageTranslateX}, ${imageTranslateY})`;
-    deps.image.style.cursor = currentZoom > 1 ? "grab" : "default";
+    const displayedWidth = deps.image.offsetWidth || deps.image.clientWidth;
+    const displayedHeight = deps.image.offsetHeight || deps.image.clientHeight;
+    const wrapperStyles = window.getComputedStyle(deps.wrapper);
+    const padLeft = Number.parseFloat(wrapperStyles.paddingLeft) || 0;
+    const padRight = Number.parseFloat(wrapperStyles.paddingRight) || 0;
+    const padTop = Number.parseFloat(wrapperStyles.paddingTop) || 0;
+    const padBottom = Number.parseFloat(wrapperStyles.paddingBottom) || 0;
+    const viewportWidth = Math.max(
+      1,
+      (deps.wrapper.clientWidth || window.innerWidth) - padLeft - padRight,
+    );
+    const viewportHeight = Math.max(
+      1,
+      (deps.wrapper.clientHeight || window.innerHeight) - padTop - padBottom,
+    );
+    const canPan =
+      displayedWidth * currentZoom > viewportWidth ||
+      displayedHeight * currentZoom > viewportHeight;
+    deps.image.style.cursor = canPan ? "grab" : "default";
 
     deps.scheduleMarkerPositioning(deps.getIsTouchActive());
   }

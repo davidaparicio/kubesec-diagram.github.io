@@ -39,6 +39,13 @@ window.createFilterResultsService = function createFilterResultsService(deps) {
     return `Hidden because tags ${quoted} are filtered out.`;
   }
 
+  function shouldUseGoToNavigation() {
+    if (typeof deps.isMobileDevice !== "function") return false;
+    if (typeof deps.getFilterPanelOpen !== "function") return false;
+
+    return deps.isMobileDevice() && deps.getFilterPanelOpen();
+  }
+
   function createResultItem(record, options = {}) {
     const inactive = Boolean(options.inactive);
     const hiddenReason = inactive ? formatHiddenReason(options.hiddenTags) : "";
@@ -66,13 +73,70 @@ window.createFilterResultsService = function createFilterResultsService(deps) {
     const hiddenStateHtml = inactive
       ? `<div class="filter-result-state" role="note" aria-live="polite">${deps.escapeHTML(hiddenReason)}</div>`
       : "";
-    const actionsHtml =
-      hiddenStateHtml || pinButtonHtml
-        ? `<div class="filter-result-actions">${hiddenStateHtml}${pinButtonHtml}</div>`
+    const tagsFooterHtml = tagsHtml ? `<div class="filter-result-tags">${tagsHtml}</div>` : "";
+    const actionsRowHtml =
+      tagsFooterHtml || pinButtonHtml
+        ? `<div class="filter-result-actions-row">${tagsFooterHtml}${pinButtonHtml}</div>`
         : "";
-    item.innerHTML = `<div class="filter-result-head">${tagsHtml}<strong>${deps.escapeHTML(record.title || "Help")}</strong></div><div class="filter-result-content">${record.bodyHtml || "Help annotation"}</div>${actionsHtml}`;
-    if (!inactive) {
+    const actionsHtml =
+      hiddenStateHtml || actionsRowHtml
+        ? `<div class="filter-result-actions">${hiddenStateHtml}${actionsRowHtml}</div>`
+        : "";
+    item.innerHTML = `<div class="filter-result-head"><strong>${deps.escapeHTML(record.title || "Help")}</strong></div><div class="filter-result-content">${record.bodyHtml || "Help annotation"}</div>${actionsHtml}`;
+    const useGoToNavigation = shouldUseGoToNavigation();
+
+    if (!inactive && !useGoToNavigation) {
       deps.bindResultHighlight(item, record);
+    }
+
+    if (!inactive && typeof deps.goToHelpRecord === "function") {
+      let touchStartX = 0;
+      let touchStartY = 0;
+      let touchMoved = false;
+      let suppressClickUntil = 0;
+      const TAP_MOVE_THRESHOLD_PX = 10;
+
+      const onTouchStart = (event) => {
+        const touch = event.touches && event.touches[0];
+        if (!touch) return;
+        touchStartX = touch.clientX;
+        touchStartY = touch.clientY;
+        touchMoved = false;
+      };
+
+      const onTouchMove = (event) => {
+        const touch = event.touches && event.touches[0];
+        if (!touch) return;
+        const dx = Math.abs(touch.clientX - touchStartX);
+        const dy = Math.abs(touch.clientY - touchStartY);
+        if (dx > TAP_MOVE_THRESHOLD_PX || dy > TAP_MOVE_THRESHOLD_PX) {
+          touchMoved = true;
+          suppressClickUntil = Date.now() + 450;
+        }
+      };
+
+      const runGoTo = (event) => {
+        if (!shouldUseGoToNavigation()) return;
+
+        if (event.type === "click" && Date.now() < suppressClickUntil) {
+          return;
+        }
+
+        if (event.type === "touchend" && touchMoved) {
+          return;
+        }
+
+        const clickTarget = event.target instanceof Element ? event.target : null;
+        if (clickTarget && clickTarget.closest('[data-role="pin"]')) return;
+        if (event.cancelable) event.preventDefault();
+        event.stopPropagation();
+        deps.goToHelpRecord(record);
+      };
+
+      item.addEventListener("touchstart", onTouchStart, { passive: true });
+      item.addEventListener("touchmove", onTouchMove, { passive: true });
+      item.addEventListener("click", runGoTo);
+      item.addEventListener("touchend", runGoTo, { passive: false });
     }
 
     if (slug.length > 0) {

@@ -27,7 +27,38 @@ window.createViewportInputService = function createViewportInputService(deps) {
     }
   }
 
+  function isViewportLockedByMobileTooltip() {
+    if (document.body.classList.contains("mobile-tooltip-open")) {
+      return true;
+    }
+
+    const mobileTooltip = window.currentMobileTooltip;
+    return Boolean(
+      mobileTooltip &&
+      mobileTooltip.style &&
+      mobileTooltip.style.display !== "none",
+    );
+  }
+
   function handleWheel(e) {
+    if (isViewportLockedByMobileTooltip()) {
+      const mobileTooltip = window.currentMobileTooltip;
+      const rawTarget = e && e.target;
+      const target =
+        rawTarget && rawTarget.nodeType === 1
+          ? rawTarget
+          : rawTarget && rawTarget.parentElement
+            ? rawTarget.parentElement
+            : null;
+      const insideMobileTooltip =
+        mobileTooltip &&
+        target &&
+        mobileTooltip.contains(target);
+
+      if (!insideMobileTooltip && e.cancelable) e.preventDefault();
+      return;
+    }
+
     if (typeof deps.shouldIgnoreWheelEvent === "function" && deps.shouldIgnoreWheelEvent(e)) {
       return;
     }
@@ -86,15 +117,15 @@ window.createViewportInputService = function createViewportInputService(deps) {
       anchorYOnWrapper - imageBaseTopOnWrapper - targetY * currentZoom,
     );
 
-    if (deps.getCurrentZoom() <= 1) {
-      deps.setCurrentZoom(1);
-      deps.centerImageAtCurrentZoom();
+    if (deps.getCurrentZoom() < deps.getMinZoom()) {
+      deps.setCurrentZoom(deps.getMinZoom());
     }
 
     deps.updateImageTransform();
   }
 
   function handleMouseDown(e) {
+    if (isViewportLockedByMobileTooltip()) return;
     if (deps.getCurrentZoom() <= 1) return;
     if (e.button !== 0) return;
     if (!deps.image.contains(e.target)) return;
@@ -108,6 +139,7 @@ window.createViewportInputService = function createViewportInputService(deps) {
   }
 
   function handleMouseMove(e) {
+    if (isViewportLockedByMobileTooltip()) return;
     if (!deps.getIsPanning()) return;
 
     deps.setImageTranslateX(e.clientX - deps.getPanStartX());
@@ -118,6 +150,13 @@ window.createViewportInputService = function createViewportInputService(deps) {
   }
 
   function handleMouseUp(e) {
+    if (isViewportLockedByMobileTooltip()) {
+      if (deps.getIsPanning()) {
+        deps.setIsPanning(false);
+      }
+      return;
+    }
+
     if (!deps.getIsPanning()) return;
 
     deps.setIsPanning(false);
@@ -139,7 +178,73 @@ window.createViewportInputService = function createViewportInputService(deps) {
     };
   }
 
+  function canPanAtCurrentZoom() {
+    const currentZoom = deps.getCurrentZoom();
+    const displayedWidth = deps.image.offsetWidth || deps.image.clientWidth;
+    const displayedHeight = deps.image.offsetHeight || deps.image.clientHeight;
+    const wrapperStyles = window.getComputedStyle(deps.wrapper);
+    const padLeft = Number.parseFloat(wrapperStyles.paddingLeft) || 0;
+    const padRight = Number.parseFloat(wrapperStyles.paddingRight) || 0;
+    const padTop = Number.parseFloat(wrapperStyles.paddingTop) || 0;
+    const padBottom = Number.parseFloat(wrapperStyles.paddingBottom) || 0;
+    const viewportWidth = Math.max(
+      1,
+      (deps.wrapper.clientWidth || window.innerWidth) - padLeft - padRight,
+    );
+    const viewportHeight = Math.max(
+      1,
+      (deps.wrapper.clientHeight || window.innerHeight) - padTop - padBottom,
+    );
+
+    return (
+      displayedWidth * currentZoom > viewportWidth ||
+      displayedHeight * currentZoom > viewportHeight
+    );
+  }
+
+  function shouldIgnoreTouchEvent(e) {
+    const rawTarget = e && e.target;
+    const target =
+      rawTarget && typeof rawTarget.closest === "function"
+        ? rawTarget
+        : rawTarget && rawTarget.parentElement && typeof rawTarget.parentElement.closest === "function"
+          ? rawTarget.parentElement
+          : null;
+
+    const mobileTooltip = window.currentMobileTooltip;
+    if (
+      mobileTooltip &&
+      mobileTooltip.style &&
+      mobileTooltip.style.display !== "none" &&
+      target &&
+      mobileTooltip.contains(target)
+    ) {
+      return true;
+    }
+
+    if (!target || typeof target.closest !== "function") return false;
+
+    return Boolean(
+      target.closest(".tooltip-box") ||
+      target.closest("#filter-panel") ||
+      target.closest("#user-annotations-modal") ||
+      target.closest("#edit-annotation-modal"),
+    );
+  }
+
   function handleTouchStart(e) {
+    if (isViewportLockedByMobileTooltip()) {
+      deps.setIsPanning(false);
+      deps.setIsTouchActive(false);
+      return;
+    }
+
+    if (shouldIgnoreTouchEvent(e)) {
+      deps.setIsPanning(false);
+      deps.setIsTouchActive(false);
+      return;
+    }
+
     deps.setIsTouchActive(true);
 
     deps.setCachedBounds(null);
@@ -158,7 +263,7 @@ window.createViewportInputService = function createViewportInputService(deps) {
       return;
     }
 
-    if (e.touches.length === 1 && deps.getCurrentZoom() > 1) {
+    if (e.touches.length === 1 && canPanAtCurrentZoom()) {
       deps.setIsPanning(true);
       deps.setPanStartX(e.touches[0].clientX - deps.getImageTranslateX());
       deps.setPanStartY(e.touches[0].clientY - deps.getImageTranslateY());
@@ -167,6 +272,14 @@ window.createViewportInputService = function createViewportInputService(deps) {
   }
 
   function handleTouchMove(e) {
+    if (isViewportLockedByMobileTooltip()) {
+      return;
+    }
+
+    if (shouldIgnoreTouchEvent(e)) {
+      return;
+    }
+
     if (e.touches.length === 2) {
       const currentDistance = getTouchDistance(e.touches);
       const currentCenter = getTouchCenter(e.touches);
@@ -200,9 +313,8 @@ window.createViewportInputService = function createViewportInputService(deps) {
         centerY - imageBaseTopOnWrapper - targetY * deps.getCurrentZoom(),
       );
 
-      if (deps.getCurrentZoom() <= 1) {
-        deps.setCurrentZoom(1);
-        deps.centerImageAtCurrentZoom();
+      if (deps.getCurrentZoom() < deps.getMinZoom()) {
+        deps.setCurrentZoom(deps.getMinZoom());
       }
 
       deps.updateImageTransform();
@@ -219,6 +331,16 @@ window.createViewportInputService = function createViewportInputService(deps) {
   }
 
   function handleTouchEnd(e) {
+    if (isViewportLockedByMobileTooltip()) {
+      deps.setIsPanning(false);
+      deps.setIsTouchActive(false);
+      return;
+    }
+
+    if (shouldIgnoreTouchEvent(e)) {
+      return;
+    }
+
     if (e.touches.length !== 0) return;
 
     deps.setIsPanning(false);
@@ -231,6 +353,10 @@ window.createViewportInputService = function createViewportInputService(deps) {
   }
 
   function handleDocumentTouchMove(e) {
+    if (isViewportLockedByMobileTooltip()) {
+      return;
+    }
+
     if (!deps.getIsTouchActive()) return;
     if (!e.touches || e.touches.length < 2) return;
     if (e.cancelable) e.preventDefault();

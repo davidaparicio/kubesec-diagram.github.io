@@ -122,6 +122,96 @@ function onFilterConstraintStateChanged() {
   urlStateService.updateURLState();
 }
 
+function isRectValid(rect) {
+  return (
+    rect &&
+    Number.isFinite(rect.left) &&
+    Number.isFinite(rect.top) &&
+    Number.isFinite(rect.width) &&
+    Number.isFinite(rect.height) &&
+    rect.width > 0 &&
+    rect.height > 0
+  );
+}
+
+function pulseGoToElement(element) {
+  if (!element || typeof element.getBoundingClientRect !== "function") return;
+
+  const rect = element.getBoundingClientRect();
+  if (!isRectValid(rect)) return;
+
+  if (element._mobileGoToPulseEl && element._mobileGoToPulseEl.parentNode) {
+    element._mobileGoToPulseEl.parentNode.removeChild(element._mobileGoToPulseEl);
+    element._mobileGoToPulseEl = null;
+  }
+
+  if (element._mobileGoToPulseTimeout) {
+    clearTimeout(element._mobileGoToPulseTimeout);
+    element._mobileGoToPulseTimeout = null;
+  }
+
+  const indicator = document.createElement("div");
+  indicator.className = "mobile-go-to-indicator";
+  const size = Math.max(22, Math.min(60, Math.max(rect.width, rect.height) * 1.35));
+  indicator.style.width = `${Math.round(size)}px`;
+  indicator.style.height = `${Math.round(size)}px`;
+  indicator.style.left = `${Math.round(rect.left + rect.width / 2)}px`;
+  indicator.style.top = `${Math.round(rect.top + rect.height / 2)}px`;
+  document.body.appendChild(indicator);
+  element._mobileGoToPulseEl = indicator;
+
+  element._mobileGoToPulseTimeout = setTimeout(() => {
+    if (indicator.parentNode) {
+      indicator.parentNode.removeChild(indicator);
+    }
+    if (element._mobileGoToPulseEl === indicator) {
+      element._mobileGoToPulseEl = null;
+    }
+    element._mobileGoToPulseTimeout = null;
+  }, 700);
+}
+
+function focusHelpRecord(record) {
+  if (!record || !record.element || typeof record.element.getBoundingClientRect !== "function") {
+    return;
+  }
+
+  const targetZoom = Math.min(maxZoom, Math.max(currentZoom, 2));
+  currentZoom = targetZoom;
+  viewportService.updateImageTransform();
+
+  const wrapperRect = wrapper.getBoundingClientRect();
+  const targetRect = record.element.getBoundingClientRect();
+  if (!isRectValid(wrapperRect) || !isRectValid(targetRect)) {
+    return;
+  }
+
+  const viewportCenterX = wrapperRect.left + wrapperRect.width / 2;
+  const viewportCenterY = wrapperRect.top + wrapperRect.height / 2;
+  const targetCenterX = targetRect.left + targetRect.width / 2;
+  const targetCenterY = targetRect.top + targetRect.height / 2;
+
+  imageTranslateX += viewportCenterX - targetCenterX;
+  imageTranslateY += viewportCenterY - targetCenterY;
+  viewportService.updateImageTransform();
+}
+
+function goToHelpRecord(record) {
+  if (!record || !record.element) return;
+
+  if (filterPanelOpen) {
+    filterPanelStateService.setFilterPanelOpen(false);
+  }
+
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      viewportService.syncDiagramSize();
+      focusHelpRecord(record);
+      pulseGoToElement(record.element);
+    });
+  });
+}
+
 function togglePinnedHelpSlug(slugValue) {
   const slug = `${slugValue || ""}`.trim();
   if (!slug) return;
@@ -424,6 +514,10 @@ const filterResultsService = window.createFilterResultsService({
   clearFilterHighlight: () => filterHighlightService.clear(),
   bindResultHighlight: (item, record) =>
     filterHighlightService.bindResultHighlight(item, record),
+  isMobileDevice: () => tooltipService.isMobileDevice(),
+  getFilterPanelOpen: () => filterPanelOpen,
+  getFilterPanelOverlayMode: () => filterPanelOverlayMode,
+  goToHelpRecord,
   updateSvgElementVisibility: (element) =>
     svgHelpService.updateSvgElementVisibility(element),
   updateFilterResultSummary: (helpVisible, helpTotal, query) => {

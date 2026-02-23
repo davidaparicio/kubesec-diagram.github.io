@@ -29,6 +29,15 @@ body {
     background: var(--page-bg);
 }
 
+body.mobile-tooltip-open::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 19990;
+    pointer-events: none;
+}
+
 #container {
     display: flex;
     height: var(--vh-full);
@@ -120,7 +129,7 @@ body {
 
 .tooltip-head {
     position: relative;
-    padding-right: 120px;
+    padding-right: 0;
 }
 
 .tooltip-content {
@@ -130,8 +139,15 @@ body {
 
 .tooltip-actions {
     display: flex;
-    justify-content: flex-end;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 10px;
     margin-top: 10px;
+}
+
+.tooltip-tag-wrap {
+    flex: 1;
+    min-width: 0;
 }
 
 .tooltip-pin-btn {
@@ -142,6 +158,7 @@ body {
     color: #e2e8f0;
     font-size: 11px;
     cursor: pointer;
+    flex: 0 0 auto;
 }
 
 .tooltip-pin-btn.is-pinned {
@@ -165,6 +182,23 @@ body {
     overflow-x: auto;
     overflow-y: hidden;
     scrollbar-width: thin;
+}
+
+.tooltip-box .annotation-tag-badges.tooltip-tag-badges {
+    position: static !important;
+    top: auto !important;
+    right: auto !important;
+    justify-content: flex-start;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+.tooltip-box .annotation-tag-badges.tooltip-tag-badges .annotation-tag-badge {
+    min-height: 28px;
+    padding: 4px 10px;
+    font-size: 11px;
+    line-height: 1;
 }
 
 .annotation-tag-badge {
@@ -490,9 +524,22 @@ body {
 .filter-result-actions {
     margin-top: 8px;
     display: flex;
-    align-items: center;
-    justify-content: flex-end;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
     gap: 8px;
+}
+
+.filter-result-actions-row {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.filter-result-tags {
+    flex: 1;
+    min-width: 0;
 }
 
 .filter-result-state {
@@ -510,7 +557,23 @@ body {
 
 .filter-result-head {
     position: relative;
-    padding-right: 130px;
+    padding-right: 0;
+}
+
+.filter-result-item .annotation-tag-badges {
+    position: static;
+    top: auto;
+    right: auto;
+    justify-content: flex-start;
+    max-width: 100%;
+    margin-bottom: 0;
+}
+
+.filter-result-item .annotation-tag-badges .annotation-tag-badge {
+    min-height: 28px;
+    padding: 4px 10px;
+    font-size: 11px;
+    line-height: 1;
 }
 
 .filter-result-item:focus {
@@ -773,6 +836,33 @@ body.theme-dark .footer-meta {
 [data-help],
 [data-tags] {
     transition: opacity 0.12s ease;
+}
+
+.mobile-go-to-indicator {
+    position: fixed;
+    transform: translate(-50%, -50%);
+    border-radius: 999px;
+    border: 2px solid rgba(56, 189, 248, 0.95);
+    background: rgba(56, 189, 248, 0.14);
+    box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.2);
+    pointer-events: none;
+    z-index: 21100;
+    animation: mobile-go-to-indicator-pulse 0.7s ease-out forwards;
+}
+
+@keyframes mobile-go-to-indicator-pulse {
+    0% {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(0.65);
+    }
+    25% {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1);
+    }
+    100% {
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(1.35);
+    }
 }
 
 .footer-buttons {
@@ -1082,6 +1172,10 @@ body.theme-dark .footer-meta {
 
 @media (max-width: 768px) {
     .desktop-only {
+        display: none !important;
+    }
+
+    .filter-panel-controls-row .user-annotations-row {
         display: none !important;
     }
 }
@@ -1769,27 +1863,76 @@ body.theme-dark .footer-meta {
     /* Mobile tooltip styling */
     .tooltip-box.mobile-tooltip {
         position: fixed !important;
-        top: 20px !important;
-        bottom: 40px !important;
-        left: 15px !important;
-        right: 15px !important;
-        width: auto !important;
-        min-width: auto !important;
-        max-width: none !important;
-        max-height: calc(var(--mobile-vh) - 60px) !important;
+        top: 50% !important;
+        left: 50% !important;
+        right: auto !important;
+        bottom: auto !important;
+        width: min(92vw, 560px) !important;
+        min-width: min(92vw, 560px) !important;
+        max-width: min(92vw, 560px) !important;
+        max-height: min(calc(var(--mobile-vh) - 120px), 72vh) !important;
         height: auto !important;
-        transform: none !important;
+        transform: translate(-50%, -50%) !important;
         background: rgba(20, 20, 20, 0.98);
         backdrop-filter: blur(10px);
         border: 1px solid rgba(255, 255, 255, 0.2);
         border-radius: 12px;
-        padding: 20px;
+        padding: 16px 16px 0;
         font-size: 16px;
         line-height: 1.5;
         z-index: 20000;
         box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
         overflow-y: auto;
         overflow-x: hidden;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+        min-height: 180px;
+        touch-action: pan-y;
+    }
+
+    .tooltip-box.mobile-tooltip .tooltip-head {
+        flex: 0 0 auto;
+    }
+
+    .tooltip-box.mobile-tooltip .tooltip-content {
+        margin-top: 10px;
+        flex: 0 0 auto;
+        min-height: auto;
+        overflow: visible;
+        padding-right: 4px;
+        touch-action: pan-y;
+    }
+
+    .tooltip-box.mobile-tooltip .tooltip-actions {
+        margin-top: 10px;
+        position: sticky;
+        bottom: 0;
+        margin-left: -16px;
+        margin-right: -16px;
+        padding: 8px 16px 12px;
+        border-top: 1px solid rgba(148, 163, 184, 0.35);
+        background: rgba(20, 20, 20, 0.98);
+        align-items: flex-end;
+        flex: 0 0 auto;
+        z-index: 1;
+    }
+
+    .tooltip-box.mobile-tooltip .tooltip-tag-wrap {
+        flex: 1 1 auto;
+    }
+
+    .tooltip-box.mobile-tooltip .tooltip-tag-badges {
+        flex-wrap: wrap;
+        overflow-x: hidden;
+        overflow-y: auto;
+        max-height: 64px;
+    }
+
+    .tooltip-box.mobile-tooltip .tooltip-pin-btn {
+        margin-left: auto;
     }
 
     .tooltip-box.mobile-tooltip .mobile-close-btn {
