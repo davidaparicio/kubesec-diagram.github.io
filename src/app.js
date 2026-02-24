@@ -53,6 +53,7 @@ let panStartY = 0;
 let imageTranslateX = 0;
 let imageTranslateY = 0;
 let isTouchActive = false;
+let hoverPanAnimationFrame = null;
 
 // User annotations variables
 let userAnnotations = [];
@@ -168,7 +169,242 @@ function pulseGoToElement(element) {
       element._mobileGoToPulseEl = null;
     }
     element._mobileGoToPulseTimeout = null;
-  }, 700);
+  }, 3000);
+}
+
+function stopHoverPanAnimation() {
+  if (!hoverPanAnimationFrame) return;
+  cancelAnimationFrame(hoverPanAnimationFrame);
+  hoverPanAnimationFrame = null;
+}
+
+function getVisibleViewportCenter() {
+  const bounds = getVisibleViewportBounds();
+  return {
+    x: bounds.minX + (bounds.maxX - bounds.minX) / 2,
+    y: bounds.minY + (bounds.maxY - bounds.minY) / 2,
+  };
+}
+
+function getVisibleViewportBounds() {
+  const margin = 8;
+  let minX = margin;
+  let maxX = Math.max(minX + 1, window.innerWidth - margin);
+  let minY = margin;
+  let maxY = Math.max(minY + 1, window.innerHeight - margin);
+
+  if (filterPanelOpen && filterPanel) {
+    const panelRect = filterPanel.getBoundingClientRect();
+    if (panelRect.width > 0) {
+      const panelOverlapsViewport = panelRect.left < window.innerWidth && panelRect.right > 0;
+      if (panelOverlapsViewport) {
+        const anchoredRight = panelRect.left >= window.innerWidth * 0.35;
+        if (anchoredRight) {
+          maxX = Math.min(maxX, panelRect.left - margin);
+        } else {
+          minX = Math.max(minX, panelRect.right + margin);
+        }
+      }
+    }
+  }
+
+  if (maxX <= minX) {
+    minX = margin;
+    maxX = Math.max(minX + 1, window.innerWidth - margin);
+  }
+
+  if (maxY <= minY) {
+    minY = margin;
+    maxY = Math.max(minY + 1, window.innerHeight - margin);
+  }
+
+  return { minX, maxX, minY, maxY };
+}
+
+function getRectFromSvgGraphicsElement(element) {
+  if (!element || typeof element.getBBox !== "function" || typeof element.getScreenCTM !== "function") {
+    return null;
+  }
+
+  try {
+    const bbox = element.getBBox();
+    const ctm = element.getScreenCTM();
+    if (!bbox || !ctm || !Number.isFinite(bbox.width) || !Number.isFinite(bbox.height)) {
+      return null;
+    }
+    if (bbox.width <= 0 || bbox.height <= 0) return null;
+
+    const corners = [
+      new DOMPoint(bbox.x, bbox.y),
+      new DOMPoint(bbox.x + bbox.width, bbox.y),
+      new DOMPoint(bbox.x, bbox.y + bbox.height),
+      new DOMPoint(bbox.x + bbox.width, bbox.y + bbox.height),
+    ].map((point) => point.matrixTransform(ctm));
+
+    const xs = corners.map((point) => point.x);
+    const ys = corners.map((point) => point.y);
+    const left = Math.min(...xs);
+    const right = Math.max(...xs);
+    const top = Math.min(...ys);
+    const bottom = Math.max(...ys);
+    const width = right - left;
+    const height = bottom - top;
+
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      return null;
+    }
+
+    return { left, top, right, bottom, width, height };
+  } catch (_error) {
+    return null;
+  }
+}
+
+function getElementRect(element) {
+  if (!element || typeof element.getBoundingClientRect !== "function") return null;
+  const rect = element.getBoundingClientRect();
+  if (rect && rect.width > 0 && rect.height > 0) {
+    return {
+      left: rect.left,
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      width: rect.width,
+      height: rect.height,
+    };
+  }
+
+  const svgRect = getRectFromSvgGraphicsElement(element);
+  if (svgRect) return svgRect;
+  return null;
+}
+
+function getElementFocusPoint(element) {
+  const viewportArea = window.innerWidth * window.innerHeight;
+  const candidates = [element];
+  const candidateSelector =
+    "rect,circle,ellipse,path,polygon,polyline,line,text,foreignObject,use,image";
+  if (element && typeof element.querySelectorAll === "function") {
+    candidates.push(...Array.from(element.querySelectorAll(candidateSelector)));
+  }
+
+  let bestPoint = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  candidates.forEach((candidate) => {
+    const rect = getElementRect(candidate);
+    if (!rect) return;
+    const area = rect.width * rect.height;
+    if (!Number.isFinite(area) || area <= 1) return;
+    if (area > viewportArea * 0.75) return;
+    const score = Math.sqrt(area);
+    if (score >= bestScore) return;
+    bestScore = score;
+    bestPoint = {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+    };
+  });
+
+  return bestPoint;
+}
+
+function centerHelpRecordInView(record, durationMs = 250, onComplete = null) {
+  const element = record && record.element;
+  if (!element || typeof element.getBoundingClientRect !== "function") {
+    if (typeof onComplete === "function") onComplete();
+    return;
+  }
+
+  if (typeof tooltipService !== "undefined" && tooltipService.isMobileDevice()) {
+    if (typeof onComplete === "function") onComplete();
+    return;
+  }
+
+  stopHoverPanAnimation();
+  viewportService.updateImageTransform();
+
+  const wrapperRect = wrapper.getBoundingClientRect();
+  const focusPoint = getElementFocusPoint(element);
+  const elementRect = element.getBoundingClientRect();
+  if (!isRectValid(wrapperRect) || !isRectValid(elementRect)) {
+    if (typeof onComplete === "function") onComplete();
+    return;
+  }
+
+  const viewportCenter = getVisibleViewportCenter();
+  const desiredCenterX = viewportCenter.x;
+  const desiredCenterY = viewportCenter.y;
+  const currentCenterX = focusPoint ? focusPoint.x : elementRect.left + elementRect.width / 2;
+  const currentCenterY = focusPoint ? focusPoint.y : elementRect.top + elementRect.height / 2;
+
+  const visibleBounds = getVisibleViewportBounds();
+  const VISIBILITY_PADDING = 12;
+  const isAlreadyVisible =
+    currentCenterX >= visibleBounds.minX + VISIBILITY_PADDING &&
+    currentCenterX <= visibleBounds.maxX - VISIBILITY_PADDING &&
+    currentCenterY >= visibleBounds.minY + VISIBILITY_PADDING &&
+    currentCenterY <= visibleBounds.maxY - VISIBILITY_PADDING;
+  if (isAlreadyVisible) {
+    if (typeof onComplete === "function") onComplete();
+    return;
+  }
+
+  const deltaX = desiredCenterX - currentCenterX;
+  const deltaY = desiredCenterY - currentCenterY;
+  if (Math.abs(deltaX) < 1 && Math.abs(deltaY) < 1) {
+    if (typeof onComplete === "function") onComplete();
+    return;
+  }
+
+  const startTranslateX = imageTranslateX;
+  const startTranslateY = imageTranslateY;
+  const endTranslateX = startTranslateX + deltaX;
+  const endTranslateY = startTranslateY + deltaY;
+  const duration = Math.max(16, Number(durationMs) || 250);
+  const startTime = performance.now();
+
+  const step = (now) => {
+    const t = Math.min(1, (now - startTime) / duration);
+    const eased = 1 - Math.pow(1 - t, 3);
+    imageTranslateX = startTranslateX + (endTranslateX - startTranslateX) * eased;
+    imageTranslateY = startTranslateY + (endTranslateY - startTranslateY) * eased;
+    viewportService.updateImageTransform();
+    if (
+      typeof filterHighlightService !== "undefined" &&
+      filterHighlightService &&
+      typeof filterHighlightService.refreshConnectionPosition === "function"
+    ) {
+      filterHighlightService.refreshConnectionPosition();
+    }
+
+    if (t < 1) {
+      hoverPanAnimationFrame = requestAnimationFrame(step);
+      return;
+    }
+
+    const finalFocusPoint = getElementFocusPoint(element);
+    if (finalFocusPoint) {
+      const finalDeltaX = desiredCenterX - finalFocusPoint.x;
+      const finalDeltaY = desiredCenterY - finalFocusPoint.y;
+      if (Math.abs(finalDeltaX) > 1 || Math.abs(finalDeltaY) > 1) {
+        imageTranslateX += finalDeltaX;
+        imageTranslateY += finalDeltaY;
+        viewportService.updateImageTransform();
+        if (
+          typeof filterHighlightService !== "undefined" &&
+          filterHighlightService &&
+          typeof filterHighlightService.refreshConnectionPosition === "function"
+        ) {
+          filterHighlightService.refreshConnectionPosition();
+        }
+      }
+    }
+
+    hoverPanAnimationFrame = null;
+    if (typeof onComplete === "function") onComplete();
+  };
+
+  hoverPanAnimationFrame = requestAnimationFrame(step);
 }
 
 function focusHelpRecord(record) {
@@ -459,7 +695,10 @@ if (typeof window.createFilterHighlightService !== "function") {
   throw new Error("Missing filter highlight module");
 }
 
-const filterHighlightService = window.createFilterHighlightService();
+const filterHighlightService = window.createFilterHighlightService({
+  centerRecordInView: (record, durationMs, onComplete) =>
+    centerHelpRecordInView(record, durationMs, onComplete),
+});
 
 if (typeof window.createFilterResultsService !== "function") {
   console.error("Missing filter results module: createFilterResultsService");

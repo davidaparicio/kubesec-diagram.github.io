@@ -1,6 +1,7 @@
-window.createFilterHighlightService = function createFilterHighlightService() {
+window.createFilterHighlightService = function createFilterHighlightService(deps = {}) {
   let activeFilterHighlight = null;
   let activeConnection = null;
+  let pendingHighlightToken = 0;
   let lineLayer = null;
   let lineElement = null;
   let lineFrame = null;
@@ -249,6 +250,8 @@ window.createFilterHighlightService = function createFilterHighlightService() {
   }
 
   function clear() {
+    pendingHighlightToken += 1;
+
     if (!activeFilterHighlight) return;
 
     if (activeFilterHighlight.type === "help") {
@@ -282,6 +285,15 @@ window.createFilterHighlightService = function createFilterHighlightService() {
 
   function bindResultHighlight(item, record) {
     const onEnter = () => {
+      if (typeof deps.centerRecordInView === "function") {
+        const token = ++pendingHighlightToken;
+        deps.centerRecordInView(record, 250, () => {
+          if (token !== pendingHighlightToken) return;
+          highlightHelpAnnotation(record, item);
+        });
+        return;
+      }
+
       highlightHelpAnnotation(record, item);
     };
 
@@ -291,9 +303,14 @@ window.createFilterHighlightService = function createFilterHighlightService() {
     item.addEventListener("blur", clear);
   }
 
+  function refreshConnectionPosition() {
+    scheduleLineUpdate();
+  }
+
   return {
     clear,
     highlightHelpAnnotation,
     bindResultHighlight,
+    refreshConnectionPosition,
   };
 };

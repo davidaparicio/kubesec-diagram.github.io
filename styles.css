@@ -847,7 +847,7 @@ body.theme-dark .footer-meta {
     box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.2);
     pointer-events: none;
     z-index: 21100;
-    animation: mobile-go-to-indicator-pulse 0.7s ease-out forwards;
+    animation: mobile-go-to-indicator-pulse 3s ease-out forwards;
 }
 
 @keyframes mobile-go-to-indicator-pulse {

@@ -1,6 +1,21 @@
 window.createFilterPanelStateService = function createFilterPanelStateService(deps) {
+  let pendingFocusTimeout = null;
+
+  function isMobileLayout() {
+    return window.innerWidth <= 768 || "ontouchstart" in window;
+  }
+
+  function clearPendingSearchFocus() {
+    if (pendingFocusTimeout) {
+      clearTimeout(pendingFocusTimeout);
+      pendingFocusTimeout = null;
+    }
+  }
+
   function setFilterPanelOpen(open) {
     const isOpen = Boolean(open);
+    clearPendingSearchFocus();
+
     deps.setFilterPanelOpenState(isOpen);
 
     document.body.classList.toggle("filter-panel-open", isOpen);
@@ -11,8 +26,15 @@ window.createFilterPanelStateService = function createFilterPanelStateService(de
     updateFilterPanelLayout();
 
     if (isOpen) {
-      setTimeout(() => deps.filterSearchInput.focus(), 80);
+      if (!isMobileLayout()) {
+        pendingFocusTimeout = setTimeout(() => {
+          pendingFocusTimeout = null;
+          if (!deps.getFilterPanelOpenState()) return;
+          deps.filterSearchInput.focus();
+        }, 80);
+      }
     } else {
+      deps.filterSearchInput.blur();
       deps.clearFilterHighlight();
     }
 
