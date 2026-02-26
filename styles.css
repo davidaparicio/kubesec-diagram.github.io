@@ -971,8 +971,14 @@ body.theme-dark .footer-meta {
     background: rgba(56, 189, 248, 0.14);
     box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.2);
     pointer-events: none;
-    z-index: 21100;
+    z-index: 9800;
     animation: mobile-go-to-indicator-pulse 3s ease-out forwards;
+}
+
+body.filter-panel-open .mobile-go-to-indicator,
+body.mobile-tooltip-open .mobile-go-to-indicator {
+    opacity: 0 !important;
+    animation: none !important;
 }
 
 @keyframes mobile-go-to-indicator-pulse {
