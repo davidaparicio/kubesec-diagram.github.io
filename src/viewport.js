@@ -8,14 +8,6 @@ window.createViewportService = function createViewportService(deps) {
   let panIndicatorDown = null;
   let panIndicatorLeft = null;
 
-  function isDebugEnabled() {
-    try {
-      return new URLSearchParams(window.location.search).has("debug");
-    } catch (_error) {
-      return false;
-    }
-  }
-
   function ensurePanIndicatorLayer() {
     if (panIndicatorLayer) return;
 
@@ -123,26 +115,6 @@ window.createViewportService = function createViewportService(deps) {
     } else {
       deps.image.style.width = `${viewportWidth}px`;
       deps.image.style.height = `${viewportHeight}px`;
-    }
-
-    if (isDebugEnabled()) {
-      console.log("[syncDiagramSize]", {
-        viewportWidth,
-        viewportHeight,
-        viewportAspectRatio: Number((viewportAspectRatio || 0).toFixed(4)),
-        diagramAspectRatio,
-        fitPolicy: useContainFit ? "contain-all" : "cover-all",
-        fitMode:
-          hasAspectRatio
-            ? (useContainFit
-                ? viewportAspectRatio > diagramAspectRatio
-                : viewportAspectRatio < diagramAspectRatio)
-              ? "height"
-              : "width"
-            : "free",
-        imageWidth: deps.image.style.width,
-        imageHeight: deps.image.style.height,
-      });
     }
 
     deps.setCachedBounds(null);

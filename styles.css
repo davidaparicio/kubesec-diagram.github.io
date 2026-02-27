@@ -411,6 +411,7 @@ body.diagram-fit-blackframe #main-image {
     gap: 16px;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
+    touch-action: pan-y;
 }
 
 .filter-panel-controls {
@@ -593,6 +594,7 @@ body.diagram-fit-blackframe #main-image {
     display: flex;
     flex-direction: column;
     gap: 8px;
+    touch-action: pan-y;
 }
 
 .filter-result-item {
@@ -603,6 +605,7 @@ body.diagram-fit-blackframe #main-image {
     font-size: 13px;
     line-height: 1.45;
     position: relative;
+    touch-action: pan-y;
 }
 
 .filter-result-item.is-inactive {

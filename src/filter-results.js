@@ -1,5 +1,17 @@
 window.createFilterResultsService = function createFilterResultsService(deps) {
   let pinnedSectionCollapsed = false;
+  let interactionHandlersBound = false;
+  let lastTouchLikeActivationAt = 0;
+  const touchTapState = {
+    active: false,
+    pointerId: null,
+    item: null,
+    startX: 0,
+    startY: 0,
+    moved: false,
+  };
+  const TOUCH_TAP_MOVE_THRESHOLD_PX = 14;
+  const TOUCH_CLICK_SUPPRESS_MS = 700;
 
   function getRecordSlug(record) {
     return `${record && record.slug ? record.slug : ""}`.trim();
@@ -48,12 +60,162 @@ window.createFilterResultsService = function createFilterResultsService(deps) {
     return window.innerWidth <= 768;
   }
 
+  function hasHoverCapability() {
+    return (
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(hover: hover) and (pointer: fine)").matches
+    );
+  }
+
+  function isInactiveResultItem(item) {
+    return !item || item.classList.contains("is-inactive") || item.getAttribute("aria-disabled") === "true";
+  }
+
+  function getResultItemFromTarget(target) {
+    if (!target || typeof target.closest !== "function") return null;
+    const item = target.closest(".filter-result-item");
+    if (!item || !deps.filterResults.contains(item)) return null;
+    return item;
+  }
+
+  function shouldIgnoreActivationTarget(target) {
+    if (!target || typeof target.closest !== "function") return false;
+    return Boolean(target.closest('[data-role="pin"]'));
+  }
+
+  function resetTouchTapState() {
+    touchTapState.active = false;
+    touchTapState.pointerId = null;
+    touchTapState.item = null;
+    touchTapState.startX = 0;
+    touchTapState.startY = 0;
+    touchTapState.moved = false;
+  }
+
+  function activateResultItem(item) {
+    if (!item || isInactiveResultItem(item)) return;
+    if (!shouldUseGoToNavigation()) return;
+    if (typeof deps.goToHelpRecord !== "function") return;
+
+    const record = item._filterRecord;
+    if (!record) return;
+
+    if (typeof deps.clearFilterHighlight === "function") {
+      deps.clearFilterHighlight();
+    }
+
+    const activeEl = document.activeElement;
+    if (
+      activeEl &&
+      activeEl !== document.body &&
+      typeof activeEl.blur === "function" &&
+      activeEl.classList &&
+      activeEl.classList.contains("filter-result-item")
+    ) {
+      activeEl.blur();
+    }
+
+    const isMobile = isCompactMobileMode();
+    const showPointerLine = !isMobile;
+    const preserveFitAll =
+      typeof deps.getFitAllMode === "function" ? Boolean(deps.getFitAllMode()) : false;
+    deps.goToHelpRecord(record, {
+      closePanel: isMobile,
+      preserveFitAll,
+      onComplete: () => {
+        if (typeof deps.highlightResultTemporarily === "function") {
+          deps.highlightResultTemporarily(record, showPointerLine ? item : null, 1000);
+        }
+      },
+    });
+  }
+
+  function bindInteractionHandlers() {
+    if (interactionHandlersBound) return;
+    interactionHandlersBound = true;
+
+    deps.filterResults.addEventListener("pointerdown", (event) => {
+      if (event.pointerType !== "touch") return;
+      if (!shouldUseGoToNavigation()) return;
+
+      const item = getResultItemFromTarget(event.target);
+      if (!item || isInactiveResultItem(item)) {
+        resetTouchTapState();
+        return;
+      }
+      if (shouldIgnoreActivationTarget(event.target)) {
+        resetTouchTapState();
+        return;
+      }
+
+      touchTapState.active = true;
+      touchTapState.pointerId = Number.isFinite(event.pointerId) ? event.pointerId : null;
+      touchTapState.item = item;
+      touchTapState.startX = event.clientX;
+      touchTapState.startY = event.clientY;
+      touchTapState.moved = false;
+    });
+
+    deps.filterResults.addEventListener("pointermove", (event) => {
+      if (!touchTapState.active) return;
+      if (event.pointerType !== "touch") return;
+      if (touchTapState.pointerId !== null && Number.isFinite(event.pointerId)) {
+        if (event.pointerId !== touchTapState.pointerId) return;
+      }
+
+      const dx = Math.abs(event.clientX - touchTapState.startX);
+      const dy = Math.abs(event.clientY - touchTapState.startY);
+      if (dx > TOUCH_TAP_MOVE_THRESHOLD_PX || dy > TOUCH_TAP_MOVE_THRESHOLD_PX) {
+        touchTapState.moved = true;
+      }
+    });
+
+    deps.filterResults.addEventListener("pointerup", (event) => {
+      if (!touchTapState.active) return;
+      if (event.pointerType !== "touch") return;
+      if (touchTapState.pointerId !== null && Number.isFinite(event.pointerId)) {
+        if (event.pointerId !== touchTapState.pointerId) return;
+      }
+
+      const item = touchTapState.item;
+      const moved = touchTapState.moved;
+      const endedOnItem = getResultItemFromTarget(event.target);
+      resetTouchTapState();
+      if (!item || moved || endedOnItem !== item) return;
+
+      lastTouchLikeActivationAt = Date.now();
+      activateResultItem(item);
+    });
+
+    deps.filterResults.addEventListener("pointercancel", () => {
+      resetTouchTapState();
+    });
+
+    deps.filterResults.addEventListener("click", (event) => {
+      const item = getResultItemFromTarget(event.target);
+      if (!item || isInactiveResultItem(item)) return;
+      if (!shouldUseGoToNavigation()) return;
+      if (shouldIgnoreActivationTarget(event.target)) return;
+
+      const now = Date.now();
+      if (now - lastTouchLikeActivationAt < TOUCH_CLICK_SUPPRESS_MS) {
+        return;
+      }
+
+      if (event.cancelable) event.preventDefault();
+      event.stopPropagation();
+      activateResultItem(item);
+    });
+  }
+
   function createResultItem(record, options = {}) {
     const inactive = Boolean(options.inactive);
     const hiddenReason = inactive ? formatHiddenReason(options.hiddenTags) : "";
     const item = document.createElement("div");
     item.className = "filter-result-item";
-    item.tabIndex = inactive ? -1 : 0;
+    item._filterRecord = record;
+    const enableHoverHighlight = hasHoverCapability();
+    item.tabIndex = inactive ? -1 : enableHoverHighlight ? 0 : -1;
     item.setAttribute("aria-disabled", inactive ? "true" : "false");
     if (inactive) {
       item.classList.add("is-inactive");
@@ -85,70 +247,8 @@ window.createFilterResultsService = function createFilterResultsService(deps) {
         ? `<div class="filter-result-actions">${hiddenStateHtml}${actionsRowHtml}</div>`
         : "";
     item.innerHTML = `<div class="filter-result-head"><strong>${deps.escapeHTML(record.title || "Help")}</strong></div><div class="filter-result-content">${record.bodyHtml || "Help annotation"}</div>${actionsHtml}`;
-    const useGoToNavigation = shouldUseGoToNavigation();
-
-    if (!inactive) {
+    if (!inactive && enableHoverHighlight) {
       deps.bindResultHighlight(item, record);
-    }
-
-    if (!inactive && typeof deps.goToHelpRecord === "function") {
-      let touchStartX = 0;
-      let touchStartY = 0;
-      let touchMoved = false;
-      let suppressClickUntil = 0;
-      const TAP_MOVE_THRESHOLD_PX = 10;
-
-      const onTouchStart = (event) => {
-        const touch = event.touches && event.touches[0];
-        if (!touch) return;
-        touchStartX = touch.clientX;
-        touchStartY = touch.clientY;
-        touchMoved = false;
-      };
-
-      const onTouchMove = (event) => {
-        const touch = event.touches && event.touches[0];
-        if (!touch) return;
-        const dx = Math.abs(touch.clientX - touchStartX);
-        const dy = Math.abs(touch.clientY - touchStartY);
-        if (dx > TAP_MOVE_THRESHOLD_PX || dy > TAP_MOVE_THRESHOLD_PX) {
-          touchMoved = true;
-          suppressClickUntil = Date.now() + 450;
-        }
-      };
-
-      const runGoTo = (event) => {
-        if (!shouldUseGoToNavigation()) return;
-
-        if (event.type === "click" && Date.now() < suppressClickUntil) {
-          return;
-        }
-
-        if (event.type === "touchend" && touchMoved) {
-          return;
-        }
-
-        const clickTarget = event.target instanceof Element ? event.target : null;
-        if (clickTarget && clickTarget.closest('[data-role="pin"]')) return;
-        if (event.cancelable) event.preventDefault();
-        event.stopPropagation();
-
-        const isMobile = isCompactMobileMode();
-        const usePointer = !isMobile;
-        deps.goToHelpRecord(record, {
-          closePanel: isMobile,
-          onComplete: () => {
-            if (typeof deps.highlightResultTemporarily === "function") {
-              deps.highlightResultTemporarily(record, usePointer ? item : null, 1000);
-            }
-          },
-        });
-      };
-
-      item.addEventListener("touchstart", onTouchStart, { passive: true });
-      item.addEventListener("touchmove", onTouchMove, { passive: true });
-      item.addEventListener("click", runGoTo);
-      item.addEventListener("touchend", runGoTo, { passive: false });
     }
 
     if (slug.length > 0) {
@@ -368,6 +468,8 @@ window.createFilterResultsService = function createFilterResultsService(deps) {
       onlyShowPinned ? "" : query,
     );
   }
+
+  bindInteractionHandlers();
 
   return {
     renderFilterResults,

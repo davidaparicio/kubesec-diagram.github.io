@@ -57,6 +57,7 @@ let imageTranslateY = 0;
 let isTouchActive = false;
 let hoverPanAnimationFrame = null;
 let fitAllRestoreState = null;
+let goToNavigationToken = 0;
 
 // User annotations variables
 let userAnnotations = [];
@@ -713,13 +714,17 @@ function centerHelpRecordInView(record, durationMs = 250, onComplete = null) {
   hoverPanAnimationFrame = requestAnimationFrame(step);
 }
 
-function focusHelpRecord(record) {
+function focusHelpRecord(record, options = {}) {
   if (!record || !record.element || typeof record.element.getBoundingClientRect !== "function") {
     return;
   }
 
-  const targetZoom = Math.min(maxZoom, Math.max(currentZoom, 2));
-  currentZoom = targetZoom;
+  const preserveFitAll = Boolean(options.preserveFitAll);
+  const shouldKeepFitAllZoom = preserveFitAll && fitAllMode;
+  if (!shouldKeepFitAllZoom) {
+    const targetZoom = Math.min(maxZoom, Math.max(currentZoom, 2));
+    currentZoom = targetZoom;
+  }
   viewportService.updateImageTransform();
 
   const wrapperRect = wrapper.getBoundingClientRect();
@@ -742,15 +747,18 @@ function focusHelpRecord(record) {
 
 function goToHelpRecord(record, options = {}) {
   if (!record || !record.element) return;
+  const token = ++goToNavigationToken;
 
   if (filterPanelOpen && options.closePanel !== false) {
     filterPanelStateService.setFilterPanelOpen(false);
   }
 
   requestAnimationFrame(() => {
+    if (token !== goToNavigationToken) return;
     requestAnimationFrame(() => {
+      if (token !== goToNavigationToken) return;
       viewportService.syncDiagramSize();
-      focusHelpRecord(record);
+      focusHelpRecord(record, options);
       pulseGoToElement(record.element);
       if (typeof options.onComplete === "function") {
         options.onComplete();
@@ -940,6 +948,7 @@ const viewportInputService = window.createViewportInputService({
         target.closest("#edit-annotation-modal"),
     );
   },
+  clearFilterHighlight: () => filterHighlightService.clear(),
   getFilterPanelOpen: () => filterPanelOpen,
   getFitAllMode: () => fitAllMode,
   maybePromoteFitGeometryToCover: (x, y) => maybePromoteFitGeometryToCover(x, y),
@@ -1092,6 +1101,7 @@ const filterResultsService = window.createFilterResultsService({
   isMobileDevice: () => tooltipService.isMobileDevice(),
   getFilterPanelOpen: () => filterPanelOpen,
   getFilterPanelOverlayMode: () => filterPanelOverlayMode,
+  getFitAllMode: () => fitAllMode,
   goToHelpRecord,
   updateSvgElementVisibility: (element) =>
     svgHelpService.updateSvgElementVisibility(element),
