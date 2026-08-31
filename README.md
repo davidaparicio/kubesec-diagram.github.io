@@ -21,6 +21,22 @@ It is made for the purpose stated above inside Telenor Norway. It doesn't reflec
 
 ## Changelog
 
+* v2026.09.1 (unreleased)
+  * Adding kubelet, scheduler, controller manager
+  * Lots of additional ? marks with info
+  * Moving things around making it general clearer, including removing the "both" direction network traffic over to both colors. Easier to see.
+  * Lots of tag-fixes
+  * Adding service=NodePort instead of two LoadBalancer
+  * Adding some extra run-policies, volume definitions, and other minor stuff
+  * Clearer separation of AppArmor, SELinux and seccomp
+  * Moving egress from policies to after network-policy filters.
+  * EDR > CNAPP. Made more sense
+  * Rounded lines, small tweaks to not bend so many line
+  * Typos
+* v2026.05.1
+  * Moving over to using https://calver.org instead of normal version numbers. The format will be YYYY.0M.MICRO
+  * Misc typos
+  * Misc cleanups and clearifications
 * v11 (2026-03-04)
   * Adding levels
   * Minor fixes and tweaks
