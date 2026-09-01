@@ -2,6 +2,13 @@
 
 // ---- ./src/url-state.js ----
 window.createUrlStateService = function createUrlStateService(deps) {
+  // Commas are legal in a query string, but URLSearchParams escapes them
+  // anyway. Shared links are read by people, so put them back.
+  function toReadableUrl(url) {
+    const search = url.searchParams.toString().replace(/%2C/g, ",");
+    return `${url.pathname}${search ? `?${search}` : ""}${url.hash}`;
+  }
+
   function serializeFilterState() {
     const hiddenTags = deps
       .getTagVisibilityEntries()
@@ -91,6 +98,23 @@ window.createUrlStateService = function createUrlStateService(deps) {
         url.searchParams.set("annotations", base64);
       }
 
+      const viewportValues =
+        typeof deps.getViewportUrlValues === "function"
+          ? deps.getViewportUrlValues()
+          : { fit: null, view: null };
+
+      if (viewportValues && viewportValues.fit) {
+        url.searchParams.set(deps.fitAllParam, viewportValues.fit);
+      } else {
+        url.searchParams.delete(deps.fitAllParam);
+      }
+
+      if (viewportValues && viewportValues.view) {
+        url.searchParams.set(deps.viewportParam, viewportValues.view);
+      } else {
+        url.searchParams.delete(deps.viewportParam);
+      }
+
       const filterState = serializeFilterState();
       const query = filterState.query;
       const hiddenTags = filterState.hiddenTags;
@@ -154,7 +178,7 @@ window.createUrlStateService = function createUrlStateService(deps) {
         }
       }
 
-      window.history.replaceState({}, "", url);
+      window.history.replaceState({}, "", toReadableUrl(url));
     } catch (error) {
       console.error("Failed to update URL state:", error);
     }
@@ -1708,6 +1732,10 @@ window.createViewportService = function createViewportService(deps) {
     updatePanIndicators(viewportWidth, viewportHeight, displayedWidth * currentZoom, displayedHeight * currentZoom);
 
     deps.scheduleMarkerPositioning(deps.getIsTouchActive());
+
+    if (typeof deps.onViewportSettled === "function") {
+      deps.onViewportSettled();
+    }
   }
 
   function applyRawTransform() {
@@ -1768,6 +1796,12 @@ window.createViewportInputService = function createViewportInputService(deps) {
   let resizeAnchorResetTimeout = null;
   let viewportInteractionStarted = false;
   let resizeSettleTimeout = null;
+
+  function notifyViewportUserInput() {
+    if (typeof deps.onViewportUserInput === "function") {
+      deps.onViewportUserInput();
+    }
+  }
 
   function applyRawImageTransform() {
     const currentZoom = deps.getCurrentZoom();
@@ -1996,6 +2030,7 @@ window.createViewportInputService = function createViewportInputService(deps) {
       deps.maybePromoteFitGeometryToCover(e.clientX, e.clientY);
     }
 
+    notifyViewportUserInput();
   }
 
   function handleMouseDown(e) {
@@ -2049,6 +2084,7 @@ window.createViewportInputService = function createViewportInputService(deps) {
     deps.image.style.cursor =
       deps.getCurrentZoom() > deps.getMinZoom() ? "grab" : "default";
     e.preventDefault();
+    notifyViewportUserInput();
   }
 
   function getTouchDistance(touches) {
@@ -2316,6 +2352,7 @@ window.createViewportInputService = function createViewportInputService(deps) {
     deps.setIsTouchActive(false);
     deps.setCachedBounds(null);
     deps.scheduleMarkerPositioning(true);
+    notifyViewportUserInput();
   }
 
   function handleDocumentTouchMove(e) {
@@ -2363,6 +2400,300 @@ window.createViewportInputService = function createViewportInputService(deps) {
     handleTouchStart,
     handleTouchMove,
     handleTouchEnd,
+  };
+};
+
+// ---- ./src/viewport-url.js ----
+window.createViewportUrlService = function createViewportUrlService(deps) {
+  const ZOOM_EPSILON = 0.001;
+  const COORD_DECIMALS = 4;
+  // Breathing room added around a shared rect so it is not flush against
+  // the viewport edges and the chrome that overlays the diagram.
+  const RESTORE_PADDING = 0.03;
+  // How much of a shared rect may fall outside a cover-fitted viewport before
+  // we give up on cover geometry and show the whole diagram instead.
+  const MAX_COVER_SHORTFALL = 0.15;
+  const CENTER_NUDGE_ITERATIONS = 3;
+
+  // Filter state is written to the URL during startup, long before the diagram
+  // is on screen. Read the incoming view once so those writes cannot strip it,
+  // and keep serving it until the reader moves the diagram themselves.
+  let userControlled = false;
+  let incomingState = null;
+
+  function clampUnit(value) {
+    return Math.min(1, Math.max(0, value));
+  }
+
+  function formatCoord(value) {
+    const factor = 10 ** COORD_DECIMALS;
+    return `${Math.round(value * factor) / factor}`;
+  }
+
+  function getRootSvg() {
+    return deps.image.querySelector("svg");
+  }
+
+  function getViewBox() {
+    const svgEl = getRootSvg();
+    const viewBox = svgEl && svgEl.viewBox && svgEl.viewBox.baseVal;
+    if (!viewBox || !(viewBox.width > 0) || !(viewBox.height > 0)) {
+      return null;
+    }
+    return viewBox;
+  }
+
+  function getInverseScreenMatrix() {
+    const svgEl = getRootSvg();
+    if (!svgEl || typeof svgEl.getScreenCTM !== "function") {
+      return null;
+    }
+
+    try {
+      const matrix = svgEl.getScreenCTM();
+      if (!matrix || typeof matrix.inverse !== "function") {
+        return null;
+      }
+      return matrix.inverse();
+    } catch (error) {
+      console.warn("Failed to read diagram screen matrix:", error);
+      return null;
+    }
+  }
+
+  // The shared region is what the reader can actually see: the diagram area
+  // minus whatever the filter panel covers, and never the footer strip below
+  // the wrapper.
+  function getDiagramViewportBounds() {
+    const visible = deps.getVisibleViewportBounds();
+    const wrapperRect = deps.wrapper.getBoundingClientRect();
+    if (!(wrapperRect.width > 0) || !(wrapperRect.height > 0)) {
+      return null;
+    }
+
+    const minX = Math.max(visible.minX, wrapperRect.left);
+    const maxX = Math.min(visible.maxX, wrapperRect.right);
+    const minY = Math.max(visible.minY, wrapperRect.top);
+    const maxY = Math.min(visible.maxY, wrapperRect.bottom);
+    if (!(maxX > minX) || !(maxY > minY)) {
+      return null;
+    }
+
+    return { minX, maxX, minY, maxY };
+  }
+
+  // Visible viewport expressed in diagram space, 0..1 on both axes.
+  // clampToDiagram=false keeps the raw extent, which is what the zoom math
+  // needs; the serialized rect is clamped so letterboxing is never shared.
+  function getVisibleDiagramRect(clampToDiagram = true) {
+    const viewBox = getViewBox();
+    const inverse = getInverseScreenMatrix();
+    if (!viewBox || !inverse) {
+      return null;
+    }
+
+    const bounds = getDiagramViewportBounds();
+    if (!bounds) {
+      return null;
+    }
+
+    const topLeft = new DOMPoint(bounds.minX, bounds.minY).matrixTransform(inverse);
+    const bottomRight = new DOMPoint(bounds.maxX, bounds.maxY).matrixTransform(inverse);
+    if (
+      !Number.isFinite(topLeft.x) ||
+      !Number.isFinite(topLeft.y) ||
+      !Number.isFinite(bottomRight.x) ||
+      !Number.isFinite(bottomRight.y)
+    ) {
+      return null;
+    }
+
+    let left = (topLeft.x - viewBox.x) / viewBox.width;
+    let top = (topLeft.y - viewBox.y) / viewBox.height;
+    let right = (bottomRight.x - viewBox.x) / viewBox.width;
+    let bottom = (bottomRight.y - viewBox.y) / viewBox.height;
+
+    if (clampToDiagram) {
+      left = clampUnit(left);
+      top = clampUnit(top);
+      right = clampUnit(right);
+      bottom = clampUnit(bottom);
+    }
+
+    const width = right - left;
+    const height = bottom - top;
+    if (!(width > 0) || !(height > 0)) {
+      return null;
+    }
+
+    return {
+      cx: left + width / 2,
+      cy: top + height / 2,
+      w: width,
+      h: height,
+    };
+  }
+
+  function serializeRect(rect) {
+    return [rect.cx, rect.cy, rect.w, rect.h].map(formatCoord).join(",");
+  }
+
+  function parseRect(rawValue) {
+    if (typeof rawValue !== "string") {
+      return null;
+    }
+
+    const parts = rawValue.split(",").map((part) => Number.parseFloat(part));
+    if (parts.length !== 4 || parts.some((part) => !Number.isFinite(part))) {
+      return null;
+    }
+
+    const [cx, cy, w, h] = parts;
+    if (!(w > 0) || !(h > 0) || w > 1 || h > 1) {
+      return null;
+    }
+    if (cx < 0 || cx > 1 || cy < 0 || cy > 1) {
+      return null;
+    }
+
+    return { cx, cy, w, h };
+  }
+
+  function getIncomingState() {
+    if (!incomingState) {
+      incomingState = parseFromURL();
+    }
+    return incomingState;
+  }
+
+  function markUserControlled() {
+    getIncomingState();
+    userControlled = true;
+  }
+
+  function isZoomedIn() {
+    return deps.getCurrentZoom() > deps.getMinZoom() + ZOOM_EPSILON;
+  }
+
+  // Coordinates are only worth sharing when the sender picked a view:
+  // at full zoom-out the visible rect is a property of their screen, not
+  // of the diagram, so the receiver is better off with their own default.
+  function getUrlValues() {
+    if (!userControlled) {
+      const incoming = getIncomingState();
+      return {
+        fit: incoming.fitAll ? "1" : null,
+        view: incoming.rect ? serializeRect(incoming.rect) : null,
+      };
+    }
+
+    if (deps.getFitAllMode()) {
+      return { fit: "1", view: null };
+    }
+
+    if (!isZoomedIn()) {
+      return { fit: null, view: null };
+    }
+
+    const rect = getVisibleDiagramRect(true);
+    if (!rect) {
+      return { fit: null, view: null };
+    }
+
+    return { fit: null, view: serializeRect(rect) };
+  }
+
+  function parseFromURL() {
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      const fitRaw = urlParams.get(deps.fitAllParam);
+      const fitAll = fitRaw === "1" || fitRaw === "true";
+
+      return {
+        fitAll,
+        rect: fitAll ? null : parseRect(urlParams.get(deps.viewportParam)),
+      };
+    } catch (error) {
+      console.warn("Failed to parse viewport state from URL:", error);
+      return { fitAll: false, rect: null };
+    }
+  }
+
+  function centerOnRect(rect) {
+    const viewBox = getViewBox();
+    if (!viewBox) {
+      return;
+    }
+
+    const bounds = getDiagramViewportBounds();
+    if (!bounds) {
+      return;
+    }
+
+    deps.nudgeToSvgAnchor(
+      viewBox.x + rect.cx * viewBox.width,
+      viewBox.y + rect.cy * viewBox.height,
+      bounds.minX + (bounds.maxX - bounds.minX) / 2,
+      bounds.minY + (bounds.maxY - bounds.minY) / 2,
+      CENTER_NUDGE_ITERATIONS,
+    );
+  }
+
+  // Contain semantics: pick the axis that constrains hardest so the whole
+  // shared rect fits, and show more than was shared on the other axis.
+  // Never the reverse - cropping is what makes a shared link useless.
+  function applyRect(rect) {
+    const current = getVisibleDiagramRect(false);
+    if (!current) {
+      return false;
+    }
+
+    const targetWidth = Math.min(1, rect.w * (1 + RESTORE_PADDING * 2));
+    const targetHeight = Math.min(1, rect.h * (1 + RESTORE_PADDING * 2));
+    const scaleFactor = Math.min(current.w / targetWidth, current.h / targetHeight);
+    if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) {
+      return false;
+    }
+
+    const minZoom = deps.getMinZoom();
+    const desiredZoom = deps.getCurrentZoom() * scaleFactor;
+
+    // Cover geometry cannot zoom out past minZoom, so a rect that is wider or
+    // taller than this screen can show would silently get cropped. Give up on
+    // the exact region and show the whole diagram instead.
+    if (desiredZoom < minZoom * (1 - MAX_COVER_SHORTFALL)) {
+      deps.setFitAllMode(true);
+      return true;
+    }
+
+    deps.setCurrentZoom(Math.min(deps.getMaxZoom(), Math.max(minZoom, desiredZoom)));
+    deps.applyRawTransform();
+    centerOnRect(rect);
+    deps.updateImageTransform();
+    return true;
+  }
+
+  function restoreFromURL() {
+    const state = getIncomingState();
+
+    if (state.fitAll) {
+      deps.setFitAllMode(true);
+      return true;
+    }
+
+    if (!state.rect) {
+      return false;
+    }
+
+    return applyRect(state.rect);
+  }
+
+  return {
+    getUrlValues,
+    markUserControlled,
+    parseFromURL,
+    restoreFromURL,
+    getVisibleDiagramRect,
   };
 };
 
@@ -5201,13 +5532,18 @@ window.createAppLifecycleService = function createAppLifecycleService(deps) {
       hideLoadingState();
       deps.syncDiagramSize();
 
-      deps.setCurrentZoom(1);
-      if (typeof deps.alignImageAtCurrentZoom === "function") {
-        deps.alignImageAtCurrentZoom("left", "bottom");
-      } else {
-        deps.centerImageAtCurrentZoom();
+      const restoredFromUrl =
+        typeof deps.restoreViewportFromUrl === "function" && deps.restoreViewportFromUrl();
+
+      if (!restoredFromUrl) {
+        deps.setCurrentZoom(1);
+        if (typeof deps.alignImageAtCurrentZoom === "function") {
+          deps.alignImageAtCurrentZoom("left", "bottom");
+        } else {
+          deps.centerImageAtCurrentZoom();
+        }
+        deps.updateImageTransform();
       }
-      deps.updateImageTransform();
 
       deps.renderAllMarkers();
       deps.setFilterPanelOpen(deps.getFilterPanelOpen());
@@ -5671,6 +6007,8 @@ let selectedLevel = 0;
 let maxDiagramLevel = 0;
 let fitAllMode = false;
 let fitGeometryMode = "cover";
+let viewportUrlSyncReady = false;
+let viewportUrlSyncTimeout = null;
 let pendingCoverSyncAfterFitExit = false;
 const tagVisibility = new Map();
 const MENU_VISIBLE_PARAM = "menu";
@@ -5679,6 +6017,9 @@ const FILTER_QUERY_PARAM = "filter-query";
 const FILTER_PINS_PARAM = "pins";
 const FILTER_CONSTRAINT_PARAM = "constraint";
 const FILTER_LEVEL_PARAM = "filter-level";
+const VIEWPORT_PARAM = "v";
+const FIT_ALL_PARAM = "fit";
+const VIEWPORT_URL_SYNC_DELAY = 400;
 const THEME_STORAGE_KEY = "kubesec-theme";
 const FILTER_DOCK_MIN_IMAGE_WIDTH = 1100;
 const FILTER_SEARCH_PLACEHOLDER_DEFAULT = "Search annotations...";
@@ -6353,6 +6694,7 @@ function goToHelpRecord(record, options = {}) {
       if (token !== goToNavigationToken) return;
       viewportService.syncDiagramSize();
       focusHelpRecord(record, options);
+      armViewportUrlSync();
       pulseGoToElement(record.element);
       if (typeof options.onComplete === "function") {
         options.onComplete();
@@ -6456,6 +6798,54 @@ const filterPanelStateService = window.createFilterPanelStateService({
   updateURLState: () => urlStateService.updateURLState(),
 });
 
+if (typeof window.createViewportUrlService !== "function") {
+  console.error("Missing viewport URL module: createViewportUrlService");
+  throw new Error("Missing viewport URL module");
+}
+
+const viewportUrlService = window.createViewportUrlService({
+  image,
+  wrapper,
+  viewportParam: VIEWPORT_PARAM,
+  fitAllParam: FIT_ALL_PARAM,
+  getVisibleViewportBounds: () => getVisibleViewportBounds(),
+  getCurrentZoom: () => currentZoom,
+  setCurrentZoom: (value) => {
+    currentZoom = value;
+  },
+  getMinZoom: () => minZoom,
+  getMaxZoom: () => maxZoom,
+  getFitAllMode: () => fitAllMode,
+  setFitAllMode: (enabled) => setFitAllMode(enabled),
+  applyRawTransform: () => viewportService.applyRawTransform(),
+  updateImageTransform: () => viewportService.updateImageTransform(),
+  nudgeToSvgAnchor: (svgX, svgY, clientX, clientY, iterations) =>
+    nudgeToSvgAnchor(svgX, svgY, clientX, clientY, iterations),
+});
+
+// Pan and zoom settle asynchronously, so the URL is rewritten once the
+// viewport stops moving instead of on every frame.
+function scheduleViewportUrlSync() {
+  if (!viewportUrlSyncReady) return;
+
+  if (viewportUrlSyncTimeout) {
+    clearTimeout(viewportUrlSyncTimeout);
+  }
+  viewportUrlSyncTimeout = setTimeout(() => {
+    viewportUrlSyncTimeout = null;
+    urlStateService.updateURLState();
+  }, VIEWPORT_URL_SYNC_DELAY);
+}
+
+// A link is only rewritten once the reader moves the diagram themselves.
+// Without this, opening a shared link on a screen that cannot zoom into the
+// shared rect would immediately strip the coordinates back out of the URL.
+function armViewportUrlSync() {
+  viewportUrlSyncReady = true;
+  viewportUrlService.markUserControlled();
+  scheduleViewportUrlSync();
+}
+
 if (typeof window.createUrlStateService !== "function") {
   console.error("Missing URL state module: createUrlStateService");
   throw new Error("Missing URL state module");
@@ -6472,6 +6862,9 @@ const urlStateService = window.createUrlStateService({
   getDefaultSelectedLevel: () => maxDiagramLevel,
   getUserAnnotations: () => userAnnotations,
   getMaxUserAnnotations: () => (config && config.maxUserAnnotations) || 10,
+  getViewportUrlValues: () => viewportUrlService.getUrlValues(),
+  viewportParam: VIEWPORT_PARAM,
+  fitAllParam: FIT_ALL_PARAM,
   menuVisibleParam: MENU_VISIBLE_PARAM,
   filterHideTagsParam: FILTER_HIDE_TAGS_PARAM,
   filterQueryParam: FILTER_QUERY_PARAM,
@@ -6524,6 +6917,7 @@ const viewportService = window.createViewportService({
   getIsTouchActive: () => isTouchActive,
   scheduleMarkerPositioning: (immediate) =>
     userAnnotationPositioningService.scheduleMarkerPositioning(immediate),
+  onViewportSettled: () => scheduleViewportUrlSync(),
 });
 
 if (typeof window.createViewportInputService !== "function") {
@@ -6599,6 +6993,7 @@ const viewportInputService = window.createViewportInputService({
     isTouchActive = value;
   },
   getFitAllMode: () => fitAllMode,
+  onViewportUserInput: () => armViewportUrlSync(),
 });
 
 if (typeof window.createThemeService !== "function") {
@@ -6752,6 +7147,7 @@ const appLifecycleService = window.createAppLifecycleService({
   centerImageAtCurrentZoom: () => viewportService.centerImageAtCurrentZoom(),
   getFitAllMode: () => fitAllMode,
   updateImageTransform: () => viewportService.updateImageTransform(),
+  restoreViewportFromUrl: () => viewportUrlService.restoreFromURL(),
   setFilterPanelOpen: (open) => filterPanelStateService.setFilterPanelOpen(open),
   renderAllMarkers: () => userAnnotationRenderService.renderAllMarkers(),
   clearUserAnnotationVisuals: () => userAnnotationRenderService.clearUserAnnotationVisuals(),
@@ -7124,6 +7520,7 @@ themeToggleBtn.addEventListener("click", () => {
 
 fitToViewportBtn.addEventListener("click", () => {
   setFitAllMode(!fitAllMode);
+  armViewportUrlSync();
 });
 
 updateFitButtonState();

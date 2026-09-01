@@ -20,6 +20,7 @@ const config = {
       "./src/filter-panel-input.js",
       "./src/viewport.js",
       "./src/viewport-input.js",
+      "./src/viewport-url.js",
       "./src/theme.js",
       "./src/content-utils.js",
       "./src/help-utils.js",

@@ -331,6 +331,10 @@ window.createViewportService = function createViewportService(deps) {
     updatePanIndicators(viewportWidth, viewportHeight, displayedWidth * currentZoom, displayedHeight * currentZoom);
 
     deps.scheduleMarkerPositioning(deps.getIsTouchActive());
+
+    if (typeof deps.onViewportSettled === "function") {
+      deps.onViewportSettled();
+    }
   }
 
   function applyRawTransform() {

@@ -9,6 +9,12 @@ window.createViewportInputService = function createViewportInputService(deps) {
   let viewportInteractionStarted = false;
   let resizeSettleTimeout = null;
 
+  function notifyViewportUserInput() {
+    if (typeof deps.onViewportUserInput === "function") {
+      deps.onViewportUserInput();
+    }
+  }
+
   function applyRawImageTransform() {
     const currentZoom = deps.getCurrentZoom();
     const imageTranslateX = deps.getImageTranslateX();
@@ -236,6 +242,7 @@ window.createViewportInputService = function createViewportInputService(deps) {
       deps.maybePromoteFitGeometryToCover(e.clientX, e.clientY);
     }
 
+    notifyViewportUserInput();
   }
 
   function handleMouseDown(e) {
@@ -289,6 +296,7 @@ window.createViewportInputService = function createViewportInputService(deps) {
     deps.image.style.cursor =
       deps.getCurrentZoom() > deps.getMinZoom() ? "grab" : "default";
     e.preventDefault();
+    notifyViewportUserInput();
   }
 
   function getTouchDistance(touches) {
@@ -556,6 +564,7 @@ window.createViewportInputService = function createViewportInputService(deps) {
     deps.setIsTouchActive(false);
     deps.setCachedBounds(null);
     deps.scheduleMarkerPositioning(true);
+    notifyViewportUserInput();
   }
 
   function handleDocumentTouchMove(e) {

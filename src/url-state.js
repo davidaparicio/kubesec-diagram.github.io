@@ -1,4 +1,11 @@
 window.createUrlStateService = function createUrlStateService(deps) {
+  // Commas are legal in a query string, but URLSearchParams escapes them
+  // anyway. Shared links are read by people, so put them back.
+  function toReadableUrl(url) {
+    const search = url.searchParams.toString().replace(/%2C/g, ",");
+    return `${url.pathname}${search ? `?${search}` : ""}${url.hash}`;
+  }
+
   function serializeFilterState() {
     const hiddenTags = deps
       .getTagVisibilityEntries()
@@ -88,6 +95,23 @@ window.createUrlStateService = function createUrlStateService(deps) {
         url.searchParams.set("annotations", base64);
       }
 
+      const viewportValues =
+        typeof deps.getViewportUrlValues === "function"
+          ? deps.getViewportUrlValues()
+          : { fit: null, view: null };
+
+      if (viewportValues && viewportValues.fit) {
+        url.searchParams.set(deps.fitAllParam, viewportValues.fit);
+      } else {
+        url.searchParams.delete(deps.fitAllParam);
+      }
+
+      if (viewportValues && viewportValues.view) {
+        url.searchParams.set(deps.viewportParam, viewportValues.view);
+      } else {
+        url.searchParams.delete(deps.viewportParam);
+      }
+
       const filterState = serializeFilterState();
       const query = filterState.query;
       const hiddenTags = filterState.hiddenTags;
@@ -151,7 +175,7 @@ window.createUrlStateService = function createUrlStateService(deps) {
         }
       }
 
-      window.history.replaceState({}, "", url);
+      window.history.replaceState({}, "", toReadableUrl(url));
     } catch (error) {
       console.error("Failed to update URL state:", error);
     }

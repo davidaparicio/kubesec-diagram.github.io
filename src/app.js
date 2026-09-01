@@ -80,6 +80,8 @@ let selectedLevel = 0;
 let maxDiagramLevel = 0;
 let fitAllMode = false;
 let fitGeometryMode = "cover";
+let viewportUrlSyncReady = false;
+let viewportUrlSyncTimeout = null;
 let pendingCoverSyncAfterFitExit = false;
 const tagVisibility = new Map();
 const MENU_VISIBLE_PARAM = "menu";
@@ -88,6 +90,9 @@ const FILTER_QUERY_PARAM = "filter-query";
 const FILTER_PINS_PARAM = "pins";
 const FILTER_CONSTRAINT_PARAM = "constraint";
 const FILTER_LEVEL_PARAM = "filter-level";
+const VIEWPORT_PARAM = "v";
+const FIT_ALL_PARAM = "fit";
+const VIEWPORT_URL_SYNC_DELAY = 400;
 const THEME_STORAGE_KEY = "kubesec-theme";
 const FILTER_DOCK_MIN_IMAGE_WIDTH = 1100;
 const FILTER_SEARCH_PLACEHOLDER_DEFAULT = "Search annotations...";
@@ -762,6 +767,7 @@ function goToHelpRecord(record, options = {}) {
       if (token !== goToNavigationToken) return;
       viewportService.syncDiagramSize();
       focusHelpRecord(record, options);
+      armViewportUrlSync();
       pulseGoToElement(record.element);
       if (typeof options.onComplete === "function") {
         options.onComplete();
@@ -865,6 +871,54 @@ const filterPanelStateService = window.createFilterPanelStateService({
   updateURLState: () => urlStateService.updateURLState(),
 });
 
+if (typeof window.createViewportUrlService !== "function") {
+  console.error("Missing viewport URL module: createViewportUrlService");
+  throw new Error("Missing viewport URL module");
+}
+
+const viewportUrlService = window.createViewportUrlService({
+  image,
+  wrapper,
+  viewportParam: VIEWPORT_PARAM,
+  fitAllParam: FIT_ALL_PARAM,
+  getVisibleViewportBounds: () => getVisibleViewportBounds(),
+  getCurrentZoom: () => currentZoom,
+  setCurrentZoom: (value) => {
+    currentZoom = value;
+  },
+  getMinZoom: () => minZoom,
+  getMaxZoom: () => maxZoom,
+  getFitAllMode: () => fitAllMode,
+  setFitAllMode: (enabled) => setFitAllMode(enabled),
+  applyRawTransform: () => viewportService.applyRawTransform(),
+  updateImageTransform: () => viewportService.updateImageTransform(),
+  nudgeToSvgAnchor: (svgX, svgY, clientX, clientY, iterations) =>
+    nudgeToSvgAnchor(svgX, svgY, clientX, clientY, iterations),
+});
+
+// Pan and zoom settle asynchronously, so the URL is rewritten once the
+// viewport stops moving instead of on every frame.
+function scheduleViewportUrlSync() {
+  if (!viewportUrlSyncReady) return;
+
+  if (viewportUrlSyncTimeout) {
+    clearTimeout(viewportUrlSyncTimeout);
+  }
+  viewportUrlSyncTimeout = setTimeout(() => {
+    viewportUrlSyncTimeout = null;
+    urlStateService.updateURLState();
+  }, VIEWPORT_URL_SYNC_DELAY);
+}
+
+// A link is only rewritten once the reader moves the diagram themselves.
+// Without this, opening a shared link on a screen that cannot zoom into the
+// shared rect would immediately strip the coordinates back out of the URL.
+function armViewportUrlSync() {
+  viewportUrlSyncReady = true;
+  viewportUrlService.markUserControlled();
+  scheduleViewportUrlSync();
+}
+
 if (typeof window.createUrlStateService !== "function") {
   console.error("Missing URL state module: createUrlStateService");
   throw new Error("Missing URL state module");
@@ -881,6 +935,9 @@ const urlStateService = window.createUrlStateService({
   getDefaultSelectedLevel: () => maxDiagramLevel,
   getUserAnnotations: () => userAnnotations,
   getMaxUserAnnotations: () => (config && config.maxUserAnnotations) || 10,
+  getViewportUrlValues: () => viewportUrlService.getUrlValues(),
+  viewportParam: VIEWPORT_PARAM,
+  fitAllParam: FIT_ALL_PARAM,
   menuVisibleParam: MENU_VISIBLE_PARAM,
   filterHideTagsParam: FILTER_HIDE_TAGS_PARAM,
   filterQueryParam: FILTER_QUERY_PARAM,
@@ -933,6 +990,7 @@ const viewportService = window.createViewportService({
   getIsTouchActive: () => isTouchActive,
   scheduleMarkerPositioning: (immediate) =>
     userAnnotationPositioningService.scheduleMarkerPositioning(immediate),
+  onViewportSettled: () => scheduleViewportUrlSync(),
 });
 
 if (typeof window.createViewportInputService !== "function") {
@@ -1008,6 +1066,7 @@ const viewportInputService = window.createViewportInputService({
     isTouchActive = value;
   },
   getFitAllMode: () => fitAllMode,
+  onViewportUserInput: () => armViewportUrlSync(),
 });
 
 if (typeof window.createThemeService !== "function") {
@@ -1161,6 +1220,7 @@ const appLifecycleService = window.createAppLifecycleService({
   centerImageAtCurrentZoom: () => viewportService.centerImageAtCurrentZoom(),
   getFitAllMode: () => fitAllMode,
   updateImageTransform: () => viewportService.updateImageTransform(),
+  restoreViewportFromUrl: () => viewportUrlService.restoreFromURL(),
   setFilterPanelOpen: (open) => filterPanelStateService.setFilterPanelOpen(open),
   renderAllMarkers: () => userAnnotationRenderService.renderAllMarkers(),
   clearUserAnnotationVisuals: () => userAnnotationRenderService.clearUserAnnotationVisuals(),
@@ -1533,6 +1593,7 @@ themeToggleBtn.addEventListener("click", () => {
 
 fitToViewportBtn.addEventListener("click", () => {
   setFitAllMode(!fitAllMode);
+  armViewportUrlSync();
 });
 
 updateFitButtonState();
