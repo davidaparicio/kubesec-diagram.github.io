@@ -98,19 +98,11 @@ window.createUrlStateService = function createUrlStateService(deps) {
         url.searchParams.set("annotations", base64);
       }
 
-      const viewportValues =
-        typeof deps.getViewportUrlValues === "function"
-          ? deps.getViewportUrlValues()
-          : { fit: null, view: null };
+      const viewportValue =
+        typeof deps.getViewportUrlValue === "function" ? deps.getViewportUrlValue() : null;
 
-      if (viewportValues && viewportValues.fit) {
-        url.searchParams.set(deps.fitAllParam, viewportValues.fit);
-      } else {
-        url.searchParams.delete(deps.fitAllParam);
-      }
-
-      if (viewportValues && viewportValues.view) {
-        url.searchParams.set(deps.viewportParam, viewportValues.view);
+      if (viewportValue) {
+        url.searchParams.set(deps.viewportParam, viewportValue);
       } else {
         url.searchParams.delete(deps.viewportParam);
       }
@@ -1403,6 +1395,18 @@ window.createViewportService = function createViewportService(deps) {
   const PAN_INDICATOR_EPSILON = 2;
   const FIT_ALL_INSET = 20;
   const FIT_ALL_GAP_EPSILON = 0.75;
+  // How far the diagram may hang past the viewport, measured against the black
+  // band at full zoom-out. That band is what a zoom has to move the diagram
+  // through, so allowing it is what keeps the point under the pointer in
+  // place; without it the diagram is pinned the moment it fills the viewport,
+  // and zooming in on something near an edge eats the band first and drags the
+  // target towards the middle. It is a constant for a given layout, so the
+  // bound still moves continuously with the zoom and nothing snaps.
+  const OVERHANG_SLACK_RATIO = 1;
+  // The slack is faded out as the zoom approaches its floor, so full zoom-out
+  // still lands on the whole diagram and cannot be dragged off to one side.
+  const OVERHANG_TAPER_EXPONENT = 3;
+  let panDragBounds = { x: null, y: null };
   let panIndicatorLayer = null;
   let panIndicatorUp = null;
   let panIndicatorRight = null;
@@ -1440,6 +1444,27 @@ window.createViewportService = function createViewportService(deps) {
     indicator.classList.toggle("active", Boolean(visible));
   }
 
+  function getViewportSize() {
+    const wrapperStyles = window.getComputedStyle(deps.wrapper);
+    const padLeft = Number.parseFloat(wrapperStyles.paddingLeft) || 0;
+    const padRight = Number.parseFloat(wrapperStyles.paddingRight) || 0;
+    const padTop = Number.parseFloat(wrapperStyles.paddingTop) || 0;
+    const padBottom = Number.parseFloat(wrapperStyles.paddingBottom) || 0;
+
+    return {
+      width: Math.max(1, (deps.wrapper.clientWidth || window.innerWidth) - padLeft - padRight),
+      height: Math.max(1, (deps.wrapper.clientHeight || window.innerHeight) - padTop - padBottom),
+    };
+  }
+
+  function getScaledImageSize() {
+    const currentZoom = deps.getCurrentZoom();
+    return {
+      width: (deps.image.offsetWidth || deps.image.clientWidth) * currentZoom,
+      height: (deps.image.offsetHeight || deps.image.clientHeight) * currentZoom,
+    };
+  }
+
   function getAxisTranslate(alignment, viewportSize, scaledSize) {
     if (alignment === "right" || alignment === "bottom") {
       return viewportSize - scaledSize;
@@ -1471,21 +1496,42 @@ window.createViewportService = function createViewportService(deps) {
     setIndicatorVisible(panIndicatorDown, canRevealBottom);
   }
 
-  function syncDiagramSize() {
-    const wrapperStyles = window.getComputedStyle(deps.wrapper);
-    const padLeft = Number.parseFloat(wrapperStyles.paddingLeft) || 0;
-    const padRight = Number.parseFloat(wrapperStyles.paddingRight) || 0;
-    const padTop = Number.parseFloat(wrapperStyles.paddingTop) || 0;
-    const padBottom = Number.parseFloat(wrapperStyles.paddingBottom) || 0;
+  // How far out the diagram may be zoomed: down to the point where every edge
+  // is inside the viewport. Past the zoom that fills the screen the leftover
+  // space is letterboxed instead of the zoom being blocked.
+  function computeMinZoom() {
+    const coverZoom = deps.getCoverZoom();
+    const displayedWidth = deps.image.offsetWidth || deps.image.clientWidth;
+    const displayedHeight = deps.image.offsetHeight || deps.image.clientHeight;
+    if (!displayedWidth || !displayedHeight) {
+      return coverZoom;
+    }
 
-    const viewportWidth = Math.max(
-      1,
-      (deps.wrapper.clientWidth || window.innerWidth) - padLeft - padRight,
+    const viewport = getViewportSize();
+    const fitScale = Math.min(
+      viewport.width / displayedWidth,
+      viewport.height / displayedHeight,
     );
-    const viewportHeight = Math.max(
-      1,
-      (deps.wrapper.clientHeight || window.innerHeight) - padTop - padBottom,
-    );
+    if (!Number.isFinite(fitScale) || fitScale <= 0) {
+      return coverZoom;
+    }
+
+    return Math.min(coverZoom, fitScale);
+  }
+
+  function syncMinZoom() {
+    const minZoom = computeMinZoom();
+    deps.setMinZoom(minZoom);
+
+    if (deps.getCurrentZoom() < minZoom) {
+      deps.setCurrentZoom(minZoom);
+    }
+  }
+
+  function syncDiagramSize() {
+    const viewport = getViewportSize();
+    const viewportWidth = viewport.width;
+    const viewportHeight = viewport.height;
 
     const viewportAspectRatio = viewportWidth / Math.max(1, viewportHeight);
     const diagramAspectRatio = deps.getDiagramAspectRatio();
@@ -1514,33 +1560,76 @@ window.createViewportService = function createViewportService(deps) {
       deps.image.style.height = `${viewportHeight}px`;
     }
 
+    syncMinZoom();
     deps.setCachedBounds(null);
+  }
+
+  // The diagram's own edges: where a drag is allowed to stop.
+  function getStrictPanRange(viewportSize, scaledSize) {
+    const gap = viewportSize - scaledSize;
+    return { min: Math.min(0, gap), max: Math.max(0, gap) };
+  }
+
+  // One bound for both cases: the diagram overflowing the viewport and the
+  // diagram sitting inside it. Both ends move continuously with the zoom, so
+  // there is no point where the view snaps sideways.
+  function getPanRange(viewportSize, scaledSize, displayedSize) {
+    const gap = viewportSize - scaledSize;
+    const minZoom = deps.getMinZoom();
+    const currentZoom = deps.getCurrentZoom();
+    const maxGap = Math.max(0, viewportSize - displayedSize * minZoom);
+    const taper =
+      currentZoom > 0 ? 1 - (minZoom / currentZoom) ** OVERHANG_TAPER_EXPONENT : 0;
+    const slack = maxGap * OVERHANG_SLACK_RATIO * Math.max(0, Math.min(1, taper));
+
+    return {
+      min: Math.min(0, gap) - slack,
+      max: Math.max(0, gap) + slack,
+    };
+  }
+
+  // A drag is bounded by the diagram's edges, but it must not jerk a view that
+  // a zoom left overhanging back into place. The room the drag starts with is
+  // whatever the view already has; it is given up as the drag moves back
+  // inside, and never handed out again.
+  function clampAlongAxis(axis, translate, viewportSize, scaledSize, displayedSize) {
+    const strict = getStrictPanRange(viewportSize, scaledSize);
+    const isPanning = typeof deps.getIsPanning === "function" && deps.getIsPanning();
+
+    if (!isPanning) {
+      panDragBounds[axis] = null;
+      const range = getPanRange(viewportSize, scaledSize, displayedSize);
+      return Math.max(range.min, Math.min(translate, range.max));
+    }
+
+    if (!panDragBounds[axis]) {
+      panDragBounds[axis] = {
+        min: Math.min(strict.min, translate),
+        max: Math.max(strict.max, translate),
+      };
+    }
+
+    const bounds = panDragBounds[axis];
+    const clamped = Math.max(bounds.min, Math.min(translate, bounds.max));
+
+    bounds.min = Math.min(strict.min, Math.max(bounds.min, clamped));
+    bounds.max = Math.max(strict.max, Math.min(bounds.max, clamped));
+
+    return clamped;
   }
 
   function clampPanToBounds() {
     const displayedWidth = deps.image.offsetWidth || deps.image.clientWidth;
     const displayedHeight = deps.image.offsetHeight || deps.image.clientHeight;
-    const wrapperStyles = window.getComputedStyle(deps.wrapper);
-    const padLeft = Number.parseFloat(wrapperStyles.paddingLeft) || 0;
-    const padRight = Number.parseFloat(wrapperStyles.paddingRight) || 0;
-    const padTop = Number.parseFloat(wrapperStyles.paddingTop) || 0;
-    const padBottom = Number.parseFloat(wrapperStyles.paddingBottom) || 0;
-
-    const viewportWidth = Math.max(
-      1,
-      (deps.wrapper.clientWidth || window.innerWidth) - padLeft - padRight,
-    );
-    const viewportHeight = Math.max(
-      1,
-      (deps.wrapper.clientHeight || window.innerHeight) - padTop - padBottom,
-    );
+    const viewport = getViewportSize();
+    const viewportWidth = viewport.width;
+    const viewportHeight = viewport.height;
 
     if (!displayedWidth || !displayedHeight || !viewportWidth || !viewportHeight) {
       return;
     }
 
     const currentZoom = deps.getCurrentZoom();
-    const minZoom = typeof deps.getMinZoom === "function" ? deps.getMinZoom() : 1;
 
     let imageTranslateX = deps.getImageTranslateX();
     let imageTranslateY = deps.getImageTranslateY();
@@ -1565,6 +1654,16 @@ window.createViewportService = function createViewportService(deps) {
           : "y"
         : null;
 
+    if (!fitAllMode) {
+      deps.setImageTranslateX(
+        clampAlongAxis("x", imageTranslateX, viewportWidth, scaledWidth, displayedWidth),
+      );
+      deps.setImageTranslateY(
+        clampAlongAxis("y", imageTranslateY, viewportHeight, scaledHeight, displayedHeight),
+      );
+      return;
+    }
+
     if (scaledWidth > viewportWidth) {
       const minX = viewportWidth - scaledWidth;
       const maxX = 0;
@@ -1576,12 +1675,12 @@ window.createViewportService = function createViewportService(deps) {
           useInsetX && gapX >= FIT_ALL_INSET * 2
             ? FIT_ALL_INSET + (gapX - FIT_ALL_INSET * 2) / 2
             : gapX / 2;
-      } else if (currentZoom > minZoom + 0.0001) {
-        const minX = 0;
-        const maxX = Math.max(0, viewportWidth - scaledWidth);
-        imageTranslateX = Math.max(minX, Math.min(imageTranslateX, maxX));
       } else {
-        imageTranslateX = getAxisTranslate("left", viewportWidth, scaledWidth);
+        // Zoomed out past the edge of the diagram: the sides move independently
+        // and the diagram may hang past an edge, so the point under the pointer
+        // stays put instead of being dragged in as the band is eaten.
+        const slackX = getOverhangSlack(gapX, viewportWidth, displayedWidth);
+        imageTranslateX = Math.max(-slackX, Math.min(imageTranslateX, gapX + slackX));
       }
     }
 
@@ -1596,12 +1695,9 @@ window.createViewportService = function createViewportService(deps) {
           useInsetY && gapY >= FIT_ALL_INSET * 2
             ? FIT_ALL_INSET + (gapY - FIT_ALL_INSET * 2) / 2
             : gapY / 2;
-      } else if (currentZoom > minZoom + 0.0001) {
-        const minY = 0;
-        const maxY = Math.max(0, viewportHeight - scaledHeight);
-        imageTranslateY = Math.max(minY, Math.min(imageTranslateY, maxY));
       } else {
-        imageTranslateY = getAxisTranslate("bottom", viewportHeight, scaledHeight);
+        const slackY = getOverhangSlack(gapY, viewportHeight, displayedHeight);
+        imageTranslateY = Math.max(-slackY, Math.min(imageTranslateY, gapY + slackY));
       }
     }
 
@@ -1609,30 +1705,21 @@ window.createViewportService = function createViewportService(deps) {
     deps.setImageTranslateY(imageTranslateY);
   }
 
+  function getAlignmentTranslate(horizontal = "center", vertical = "center") {
+    const viewport = getViewportSize();
+    const scaled = getScaledImageSize();
+
+    return {
+      x: getAxisTranslate(horizontal, viewport.width, scaled.width),
+      y: getAxisTranslate(vertical, viewport.height, scaled.height),
+    };
+  }
+
   function alignImageAtCurrentZoom(horizontal = "center", vertical = "center") {
-    const displayedWidth = deps.image.offsetWidth || deps.image.clientWidth;
-    const displayedHeight = deps.image.offsetHeight || deps.image.clientHeight;
-    const wrapperStyles = window.getComputedStyle(deps.wrapper);
-    const padLeft = Number.parseFloat(wrapperStyles.paddingLeft) || 0;
-    const padRight = Number.parseFloat(wrapperStyles.paddingRight) || 0;
-    const padTop = Number.parseFloat(wrapperStyles.paddingTop) || 0;
-    const padBottom = Number.parseFloat(wrapperStyles.paddingBottom) || 0;
+    const translate = getAlignmentTranslate(horizontal, vertical);
 
-    const viewportWidth = Math.max(
-      1,
-      (deps.wrapper.clientWidth || window.innerWidth) - padLeft - padRight,
-    );
-    const viewportHeight = Math.max(
-      1,
-      (deps.wrapper.clientHeight || window.innerHeight) - padTop - padBottom,
-    );
-
-    const currentZoom = deps.getCurrentZoom();
-    const scaledWidth = displayedWidth * currentZoom;
-    const scaledHeight = displayedHeight * currentZoom;
-
-    deps.setImageTranslateX(getAxisTranslate(horizontal, viewportWidth, scaledWidth));
-    deps.setImageTranslateY(getAxisTranslate(vertical, viewportHeight, scaledHeight));
+    deps.setImageTranslateX(translate.x);
+    deps.setImageTranslateY(translate.y);
   }
 
   function centerImageAtCurrentZoom() {
@@ -1703,33 +1790,22 @@ window.createViewportService = function createViewportService(deps) {
   }
 
   function updateImageTransform() {
+    // The zoom floor depends on the viewport, which can change without a
+    // re-sync (resize settles, panel layout, orientation change).
+    syncMinZoom();
     clampPanToBounds();
 
     const currentZoom = deps.getCurrentZoom();
     const imageTranslateX = deps.getImageTranslateX();
     const imageTranslateY = deps.getImageTranslateY();
     deps.image.style.transform = `matrix(${currentZoom}, 0, 0, ${currentZoom}, ${imageTranslateX}, ${imageTranslateY})`;
-    const displayedWidth = deps.image.offsetWidth || deps.image.clientWidth;
-    const displayedHeight = deps.image.offsetHeight || deps.image.clientHeight;
-    const wrapperStyles = window.getComputedStyle(deps.wrapper);
-    const padLeft = Number.parseFloat(wrapperStyles.paddingLeft) || 0;
-    const padRight = Number.parseFloat(wrapperStyles.paddingRight) || 0;
-    const padTop = Number.parseFloat(wrapperStyles.paddingTop) || 0;
-    const padBottom = Number.parseFloat(wrapperStyles.paddingBottom) || 0;
-    const viewportWidth = Math.max(
-      1,
-      (deps.wrapper.clientWidth || window.innerWidth) - padLeft - padRight,
-    );
-    const viewportHeight = Math.max(
-      1,
-      (deps.wrapper.clientHeight || window.innerHeight) - padTop - padBottom,
-    );
-    const canPan =
-      displayedWidth * currentZoom > viewportWidth ||
-      displayedHeight * currentZoom > viewportHeight;
-    deps.image.style.cursor = canPan ? "grab" : "default";
+    const viewport = getViewportSize();
+    const viewportWidth = viewport.width;
+    const viewportHeight = viewport.height;
+    const scaled = getScaledImageSize();
+    deps.image.style.cursor = "grab";
 
-    updatePanIndicators(viewportWidth, viewportHeight, displayedWidth * currentZoom, displayedHeight * currentZoom);
+    updatePanIndicators(viewportWidth, viewportHeight, scaled.width, scaled.height);
 
     deps.scheduleMarkerPositioning(deps.getIsTouchActive());
 
@@ -1744,39 +1820,22 @@ window.createViewportService = function createViewportService(deps) {
     const imageTranslateY = deps.getImageTranslateY();
     deps.image.style.transform = `matrix(${currentZoom}, 0, 0, ${currentZoom}, ${imageTranslateX}, ${imageTranslateY})`;
 
-    const displayedWidth = deps.image.offsetWidth || deps.image.clientWidth;
-    const displayedHeight = deps.image.offsetHeight || deps.image.clientHeight;
-    const wrapperStyles = window.getComputedStyle(deps.wrapper);
-    const padLeft = Number.parseFloat(wrapperStyles.paddingLeft) || 0;
-    const padRight = Number.parseFloat(wrapperStyles.paddingRight) || 0;
-    const padTop = Number.parseFloat(wrapperStyles.paddingTop) || 0;
-    const padBottom = Number.parseFloat(wrapperStyles.paddingBottom) || 0;
-    const viewportWidth = Math.max(
-      1,
-      (deps.wrapper.clientWidth || window.innerWidth) - padLeft - padRight,
-    );
-    const viewportHeight = Math.max(
-      1,
-      (deps.wrapper.clientHeight || window.innerHeight) - padTop - padBottom,
-    );
-    const canPan =
-      displayedWidth * currentZoom > viewportWidth ||
-      displayedHeight * currentZoom > viewportHeight;
-    deps.image.style.cursor = canPan ? "grab" : "default";
+    const viewport = getViewportSize();
+    const viewportWidth = viewport.width;
+    const viewportHeight = viewport.height;
+    const scaled = getScaledImageSize();
+    deps.image.style.cursor = "grab";
 
-    updatePanIndicators(
-      viewportWidth,
-      viewportHeight,
-      displayedWidth * currentZoom,
-      displayedHeight * currentZoom,
-    );
+    updatePanIndicators(viewportWidth, viewportHeight, scaled.width, scaled.height);
 
     deps.scheduleMarkerPositioning(deps.getIsTouchActive());
   }
 
   return {
     syncDiagramSize,
+    syncMinZoom,
     clampPanToBounds,
+    getAlignmentTranslate,
     alignImageAtCurrentZoom,
     centerImageAtCurrentZoom,
     getImageBounds,
@@ -1787,6 +1846,17 @@ window.createViewportService = function createViewportService(deps) {
 
 // ---- ./src/viewport-input.js ----
 window.createViewportInputService = function createViewportInputService(deps) {
+  // Each wheel step changes the zoom by the same ratio, not the same amount.
+  // A fixed amount speeds up as the zoom drops - the diagram would appear to
+  // accelerate away exactly when it starts to letterbox. The ratio is small
+  // because the diagram is dense: fine steps keep detail readable while moving.
+  const ZOOM_STEP_RATIO = 1.0075;
+  // Scroll distance that counts as one zoom step. A slow trackpad event stays
+  // at a single step; flicking, or a mouse wheel notch, is worth many.
+  const WHEEL_DELTA_PER_STEP = 3;
+  const MAX_WHEEL_STEPS = 24;
+  const WHEEL_LINE_HEIGHT = 16;
+  const WHEEL_PAGE_HEIGHT = 400;
   let lastPinchDistance = 0;
   let lastPinchCenter = { x: 0, y: 0 };
   let isPinching = false;
@@ -1796,6 +1866,24 @@ window.createViewportInputService = function createViewportInputService(deps) {
   let resizeAnchorResetTimeout = null;
   let viewportInteractionStarted = false;
   let resizeSettleTimeout = null;
+
+  // Wheel deltas are reported in pixels, lines or pages depending on the
+  // device, so normalize before turning the distance into zoom steps.
+  function getWheelZoomSteps(event) {
+    let delta = Math.abs(event.deltaY);
+    if (event.deltaMode === 1) {
+      delta *= WHEEL_LINE_HEIGHT;
+    } else if (event.deltaMode === 2) {
+      delta *= WHEEL_PAGE_HEIGHT;
+    }
+
+    const steps = delta / WHEEL_DELTA_PER_STEP;
+    if (!Number.isFinite(steps)) {
+      return 1;
+    }
+
+    return Math.min(MAX_WHEEL_STEPS, Math.max(1, steps));
+  }
 
   function notifyViewportUserInput() {
     if (typeof deps.onViewportUserInput === "function") {
@@ -1808,13 +1896,15 @@ window.createViewportInputService = function createViewportInputService(deps) {
     const imageTranslateX = deps.getImageTranslateX();
     const imageTranslateY = deps.getImageTranslateY();
     deps.image.style.transform = `matrix(${currentZoom}, 0, 0, ${currentZoom}, ${imageTranslateX}, ${imageTranslateY})`;
-    deps.image.style.cursor = currentZoom > deps.getMinZoom() ? "grab" : "default";
+    deps.image.style.cursor = "grab";
   }
 
   function handleResize() {
     try {
       const currentZoom = deps.getCurrentZoom();
       const minZoom = deps.getMinZoom();
+      const coverZoom =
+        typeof deps.getCoverZoom === "function" ? deps.getCoverZoom() : minZoom;
 
       if (typeof deps.clearFilterHighlight === "function") {
         deps.clearFilterHighlight();
@@ -1829,12 +1919,14 @@ window.createViewportInputService = function createViewportInputService(deps) {
       ) {
         activeEl.blur();
       }
-      if (!viewportInteractionStarted && currentZoom <= minZoom + 0.001) {
+      if (!viewportInteractionStarted && currentZoom <= coverZoom + 0.001) {
         deps.updateFilterPanelLayout({
           skipImageTransform: true,
           disablePanelAnimation: true,
         });
-        if (typeof deps.getFitAllMode === "function" && deps.getFitAllMode()) {
+        const isFitAll = typeof deps.getFitAllMode === "function" && deps.getFitAllMode();
+        const isLetterboxed = currentZoom < coverZoom - 0.001;
+        if (isFitAll || isLetterboxed) {
           deps.centerImageAtCurrentZoom();
         } else if (typeof deps.alignImageAtCurrentZoom === "function") {
           deps.alignImageAtCurrentZoom("left", "bottom");
@@ -1963,25 +2055,28 @@ window.createViewportInputService = function createViewportInputService(deps) {
       return;
     }
 
-    let imageRect = deps.image.getBoundingClientRect();
-    let isOverImage =
-      e.clientX >= imageRect.left &&
-      e.clientX <= imageRect.right &&
-      e.clientY >= imageRect.top &&
-      e.clientY <= imageRect.bottom;
+    // Anywhere in the diagram area counts, including the empty space beside a
+    // letterboxed diagram - the anchor is clamped to the diagram below, so the
+    // wheel is never dead over a band of the screen.
+    const wrapperRect = deps.wrapper.getBoundingClientRect();
+    const isOverDiagramArea =
+      e.clientX >= wrapperRect.left &&
+      e.clientX <= wrapperRect.right &&
+      e.clientY >= wrapperRect.top &&
+      e.clientY <= wrapperRect.bottom;
 
-    if (!isOverImage) {
+    if (!isOverDiagramArea) {
       return;
     }
 
     e.preventDefault();
 
-    const zoomStep = 0.05;
     const imageRectBeforeZoom = deps.image.getBoundingClientRect();
+    const zoomFactor = ZOOM_STEP_RATIO ** getWheelZoomSteps(e);
     if (e.deltaY < 0) {
-      deps.setCurrentZoom(Math.min(oldZoom + zoomStep, deps.getMaxZoom()));
+      deps.setCurrentZoom(Math.min(oldZoom * zoomFactor, deps.getMaxZoom()));
     } else {
-      deps.setCurrentZoom(Math.max(oldZoom - zoomStep, deps.getMinZoom()));
+      deps.setCurrentZoom(Math.max(oldZoom / zoomFactor, deps.getMinZoom()));
     }
 
     const currentZoom = deps.getCurrentZoom();
@@ -1992,8 +2087,18 @@ window.createViewportInputService = function createViewportInputService(deps) {
     viewportInteractionStarted = true;
 
     const wrapperRectNow = deps.wrapper.getBoundingClientRect();
-    const anchorXOnWrapper = e.clientX - wrapperRectNow.left;
-    const anchorYOnWrapper = e.clientY - wrapperRectNow.top;
+    // Over the black band there is no diagram under the pointer, so anchor on
+    // the nearest point of the diagram instead of a point off its edge.
+    const anchorClientX = Math.min(
+      Math.max(e.clientX, imageRectBeforeZoom.left),
+      imageRectBeforeZoom.right,
+    );
+    const anchorClientY = Math.min(
+      Math.max(e.clientY, imageRectBeforeZoom.top),
+      imageRectBeforeZoom.bottom,
+    );
+    const anchorXOnWrapper = anchorClientX - wrapperRectNow.left;
+    const anchorYOnWrapper = anchorClientY - wrapperRectNow.top;
 
     const imageLeftOnWrapper = imageRectBeforeZoom.left - wrapperRectNow.left;
     const imageTopOnWrapper = imageRectBeforeZoom.top - wrapperRectNow.top;
@@ -2027,7 +2132,7 @@ window.createViewportInputService = function createViewportInputService(deps) {
     deps.updateImageTransform();
 
     if (typeof deps.maybePromoteFitGeometryToCover === "function") {
-      deps.maybePromoteFitGeometryToCover(e.clientX, e.clientY);
+      deps.maybePromoteFitGeometryToCover(anchorClientX, anchorClientY);
     }
 
     notifyViewportUserInput();
@@ -2035,7 +2140,6 @@ window.createViewportInputService = function createViewportInputService(deps) {
 
   function handleMouseDown(e) {
     if (isViewportLockedByMobileTooltip()) return;
-    if (!canPanAtCurrentZoom()) return;
     if (e.button !== 0) return;
     if (!deps.image.contains(e.target)) return;
 
@@ -2081,8 +2185,7 @@ window.createViewportInputService = function createViewportInputService(deps) {
     if (!deps.getIsPanning()) return;
 
     deps.setIsPanning(false);
-    deps.image.style.cursor =
-      deps.getCurrentZoom() > deps.getMinZoom() ? "grab" : "default";
+    deps.image.style.cursor = "grab";
     e.preventDefault();
     notifyViewportUserInput();
   }
@@ -2098,30 +2201,6 @@ window.createViewportInputService = function createViewportInputService(deps) {
       x: (touches[0].clientX + touches[1].clientX) / 2,
       y: (touches[0].clientY + touches[1].clientY) / 2,
     };
-  }
-
-  function canPanAtCurrentZoom() {
-    const currentZoom = deps.getCurrentZoom();
-    const displayedWidth = deps.image.offsetWidth || deps.image.clientWidth;
-    const displayedHeight = deps.image.offsetHeight || deps.image.clientHeight;
-    const wrapperStyles = window.getComputedStyle(deps.wrapper);
-    const padLeft = Number.parseFloat(wrapperStyles.paddingLeft) || 0;
-    const padRight = Number.parseFloat(wrapperStyles.paddingRight) || 0;
-    const padTop = Number.parseFloat(wrapperStyles.paddingTop) || 0;
-    const padBottom = Number.parseFloat(wrapperStyles.paddingBottom) || 0;
-    const viewportWidth = Math.max(
-      1,
-      (deps.wrapper.clientWidth || window.innerWidth) - padLeft - padRight,
-    );
-    const viewportHeight = Math.max(
-      1,
-      (deps.wrapper.clientHeight || window.innerHeight) - padTop - padBottom,
-    );
-
-    return (
-      displayedWidth * currentZoom > viewportWidth ||
-      displayedHeight * currentZoom > viewportHeight
-    );
   }
 
   function shouldIgnoreTouchEvent(e) {
@@ -2201,7 +2280,7 @@ window.createViewportInputService = function createViewportInputService(deps) {
       return;
     }
 
-    if (e.touches.length === 1 && !blockSingleTouchPan && canPanAtCurrentZoom()) {
+    if (e.touches.length === 1 && !blockSingleTouchPan) {
       if (typeof deps.getFitAllMode === "function" && deps.getFitAllMode()) {
         if (typeof deps.disableFitAllForInteraction === "function") {
           deps.disableFitAllForInteraction(
@@ -2405,8 +2484,8 @@ window.createViewportInputService = function createViewportInputService(deps) {
 
 // ---- ./src/viewport-url.js ----
 window.createViewportUrlService = function createViewportUrlService(deps) {
-  const ZOOM_EPSILON = 0.001;
   const COORD_DECIMALS = 4;
+  const ZOOM_EPSILON = 0.001;
   // Breathing room added around a shared rect so it is not flush against
   // the viewport edges and the chrome that overlays the diagram.
   const RESTORE_PADDING = 0.03;
@@ -2414,6 +2493,10 @@ window.createViewportUrlService = function createViewportUrlService(deps) {
   // we give up on cover geometry and show the whole diagram instead.
   const MAX_COVER_SHORTFALL = 0.15;
   const CENTER_NUDGE_ITERATIONS = 3;
+  // Full zoom-out is worth a word rather than a rectangle covering the whole
+  // diagram. "0" is accepted as the same thing.
+  const FIT_VALUE = "fit";
+  const FIT_ALIASES = new Set([FIT_VALUE, "0"]);
 
   // Filter state is written to the URL during startup, long before the diagram
   // is on screen. Read the incoming view once so those writes cannot strip it,
@@ -2571,51 +2654,42 @@ window.createViewportUrlService = function createViewportUrlService(deps) {
     userControlled = true;
   }
 
-  function isZoomedIn() {
-    return deps.getCurrentZoom() > deps.getMinZoom() + ZOOM_EPSILON;
+  // Zoomed out as far as it goes, whichever way the reader got there.
+  function isFullyZoomedOut() {
+    return deps.getFitAllMode() || deps.getCurrentZoom() <= deps.getMinZoom() + ZOOM_EPSILON;
   }
 
-  // Coordinates are only worth sharing when the sender picked a view:
-  // at full zoom-out the visible rect is a property of their screen, not
-  // of the diagram, so the receiver is better off with their own default.
-  function getUrlValues() {
+  // Coordinates are only worth sharing when the sender picked a view: in the
+  // default view the visible rect is a property of their screen, not of the
+  // diagram, so the receiver is better off with their own default.
+  function getUrlValue() {
     if (!userControlled) {
       const incoming = getIncomingState();
-      return {
-        fit: incoming.fitAll ? "1" : null,
-        view: incoming.rect ? serializeRect(incoming.rect) : null,
-      };
+      if (incoming.fit) return FIT_VALUE;
+      return incoming.rect ? serializeRect(incoming.rect) : null;
     }
 
-    if (deps.getFitAllMode()) {
-      return { fit: "1", view: null };
+    if (deps.isDefaultViewport()) {
+      return null;
     }
 
-    if (!isZoomedIn()) {
-      return { fit: null, view: null };
+    if (isFullyZoomedOut()) {
+      return FIT_VALUE;
     }
 
     const rect = getVisibleDiagramRect(true);
-    if (!rect) {
-      return { fit: null, view: null };
-    }
-
-    return { fit: null, view: serializeRect(rect) };
+    return rect ? serializeRect(rect) : null;
   }
 
   function parseFromURL() {
     try {
-      const urlParams = new URLSearchParams(window.location.search);
-      const fitRaw = urlParams.get(deps.fitAllParam);
-      const fitAll = fitRaw === "1" || fitRaw === "true";
+      const raw = new URLSearchParams(window.location.search).get(deps.viewportParam);
+      const fit = typeof raw === "string" && FIT_ALIASES.has(raw.trim().toLowerCase());
 
-      return {
-        fitAll,
-        rect: fitAll ? null : parseRect(urlParams.get(deps.viewportParam)),
-      };
+      return { fit, rect: fit ? null : parseRect(raw) };
     } catch (error) {
       console.warn("Failed to parse viewport state from URL:", error);
-      return { fitAll: false, rect: null };
+      return { fit: false, rect: null };
     }
   }
 
@@ -2676,7 +2750,7 @@ window.createViewportUrlService = function createViewportUrlService(deps) {
   function restoreFromURL() {
     const state = getIncomingState();
 
-    if (state.fitAll) {
+    if (state.fit) {
       deps.setFitAllMode(true);
       return true;
     }
@@ -2689,7 +2763,7 @@ window.createViewportUrlService = function createViewportUrlService(deps) {
   }
 
   return {
-    getUrlValues,
+    getUrlValue,
     markUserControlled,
     parseFromURL,
     restoreFromURL,
@@ -5536,7 +5610,9 @@ window.createAppLifecycleService = function createAppLifecycleService(deps) {
         typeof deps.restoreViewportFromUrl === "function" && deps.restoreViewportFromUrl();
 
       if (!restoredFromUrl) {
-        deps.setCurrentZoom(1);
+        deps.setCurrentZoom(
+          typeof deps.getCoverZoom === "function" ? deps.getCoverZoom() : 1,
+        );
         if (typeof deps.alignImageAtCurrentZoom === "function") {
           deps.alignImageAtCurrentZoom("left", "bottom");
         } else {
@@ -5944,7 +6020,6 @@ const filterResultCount = document.getElementById("filter-result-count");
 const filterSearchInput = document.getElementById("filter-search-input");
 const filterTagControls = document.getElementById("filter-tag-controls");
 const openFilterPanelBtn = document.getElementById("floating-filter-toggle");
-const fitToViewportBtn = document.getElementById("floating-fit-toggle");
 const themeToggleBtn = document.getElementById("floating-theme-toggle");
 const closeFilterPanelBtn = document.getElementById("close-filter-panel");
 const resetFilterBtn = document.getElementById("filter-reset-btn");
@@ -5961,7 +6036,6 @@ if (
   !filterSearchInput ||
   !filterTagControls ||
   !openFilterPanelBtn ||
-  !fitToViewportBtn ||
   !themeToggleBtn ||
   !closeFilterPanelBtn ||
   !resetFilterBtn
@@ -5972,10 +6046,13 @@ if (
 
 let cachedBounds = null;
 
-// Zoom and pan variables
-let currentZoom = 1;
+// Zoom and pan variables. Zoom is relative to the cover fit, so COVER_ZOOM is
+// the scale at which the diagram exactly fills the viewport; minZoom drops
+// below it once the diagram is smaller than the viewport on one axis.
+const COVER_ZOOM = 1;
+let currentZoom = COVER_ZOOM;
 let maxZoom = 4;
-let minZoom = 1;
+let minZoom = COVER_ZOOM;
 let isPanning = false;
 let panStartX = 0;
 let panStartY = 0;
@@ -6018,7 +6095,6 @@ const FILTER_PINS_PARAM = "pins";
 const FILTER_CONSTRAINT_PARAM = "constraint";
 const FILTER_LEVEL_PARAM = "filter-level";
 const VIEWPORT_PARAM = "v";
-const FIT_ALL_PARAM = "fit";
 const VIEWPORT_URL_SYNC_DELAY = 400;
 const THEME_STORAGE_KEY = "kubesec-theme";
 const FILTER_DOCK_MIN_IMAGE_WIDTH = 1100;
@@ -6063,17 +6139,6 @@ function onFilterConstraintStateChanged() {
     svgHelpService.refreshPinnedStates();
   }
   urlStateService.updateURLState();
-}
-
-function updateFitButtonState() {
-  fitToViewportBtn.classList.toggle("active", fitAllMode);
-  fitToViewportBtn.setAttribute("aria-pressed", fitAllMode ? "true" : "false");
-  fitToViewportBtn.title = fitAllMode ? "Return to clipped view" : "Show full diagram";
-}
-
-function updateFitBackdropState() {
-  const keepBlackFrame = fitAllMode || pendingCoverSyncAfterFitExit;
-  document.body.classList.toggle("diagram-fit-blackframe", keepBlackFrame);
 }
 
 function captureViewportAnchor(clientX = null, clientY = null) {
@@ -6159,7 +6224,6 @@ function restoreViewportAnchor(anchor) {
 
 function disableFitAllKeepViewport(options = {}) {
   if (!fitAllMode) {
-    updateFitButtonState();
     return;
   }
 
@@ -6235,7 +6299,6 @@ function maybePromoteFitGeometryToCover(anchorClientX = null, anchorClientY = nu
   if (!pendingCoverSyncAfterFitExit) return false;
   if (fitGeometryMode !== "contain") {
     pendingCoverSyncAfterFitExit = false;
-    updateFitBackdropState();
     return false;
   }
   if (!isViewportFullyCoveredAtCurrentZoom()) {
@@ -6250,7 +6313,6 @@ function maybePromoteFitGeometryToCover(anchorClientX = null, anchorClientY = nu
 
   fitGeometryMode = "cover";
   pendingCoverSyncAfterFitExit = false;
-  updateFitBackdropState();
   viewportService.syncDiagramSize();
 
   const rectAfterSync = image.getBoundingClientRect();
@@ -6290,13 +6352,10 @@ function exitFitAllStateOnly() {
   fitAllRestoreState = null;
   pendingCoverSyncAfterFitExit = true;
   document.body.classList.remove("diagram-fit-all");
-  updateFitBackdropState();
-  updateFitButtonState();
 }
 
 function disableFitAllForInteraction(anchorClientX = null, anchorClientY = null) {
   if (!fitAllMode) {
-    updateFitButtonState();
     return;
   }
 
@@ -6308,13 +6367,11 @@ function disableFitAllForInteraction(anchorClientX = null, anchorClientY = null)
   viewportService.syncDiagramSize();
   restoreViewportAnchor(anchor);
   viewportService.updateImageTransform();
-  updateFitButtonState();
 }
 
 function setFitAllMode(enabled, options = {}) {
   const next = Boolean(enabled);
   if (fitAllMode === next) {
-    updateFitButtonState();
     return;
   }
 
@@ -6340,7 +6397,6 @@ function setFitAllMode(enabled, options = {}) {
     pendingCoverSyncAfterFitExit = false;
   }
   document.body.classList.toggle("diagram-fit-all", fitAllMode);
-  updateFitBackdropState();
 
   viewportService.syncDiagramSize();
   if (fitAllMode) {
@@ -6359,7 +6415,6 @@ function setFitAllMode(enabled, options = {}) {
     fitAllRestoreState = null;
   }
   viewportService.updateImageTransform();
-  updateFitButtonState();
 }
 
 function isRectValid(rect) {
@@ -6803,11 +6858,23 @@ if (typeof window.createViewportUrlService !== "function") {
   throw new Error("Missing viewport URL module");
 }
 
+// The starting view: cover zoom, anchored bottom-left. Anything else - zoomed
+// in, zoomed out past the edges, or panned - is a view worth putting in a link.
+function isDefaultViewport() {
+  if (fitAllMode) return false;
+  if (Math.abs(currentZoom - COVER_ZOOM) > 0.001) return false;
+
+  const translate = viewportService.getAlignmentTranslate("left", "bottom");
+  return (
+    Math.abs(imageTranslateX - translate.x) < 1 &&
+    Math.abs(imageTranslateY - translate.y) < 1
+  );
+}
+
 const viewportUrlService = window.createViewportUrlService({
   image,
   wrapper,
   viewportParam: VIEWPORT_PARAM,
-  fitAllParam: FIT_ALL_PARAM,
   getVisibleViewportBounds: () => getVisibleViewportBounds(),
   getCurrentZoom: () => currentZoom,
   setCurrentZoom: (value) => {
@@ -6815,6 +6882,7 @@ const viewportUrlService = window.createViewportUrlService({
   },
   getMinZoom: () => minZoom,
   getMaxZoom: () => maxZoom,
+  isDefaultViewport: () => isDefaultViewport(),
   getFitAllMode: () => fitAllMode,
   setFitAllMode: (enabled) => setFitAllMode(enabled),
   applyRawTransform: () => viewportService.applyRawTransform(),
@@ -6862,9 +6930,8 @@ const urlStateService = window.createUrlStateService({
   getDefaultSelectedLevel: () => maxDiagramLevel,
   getUserAnnotations: () => userAnnotations,
   getMaxUserAnnotations: () => (config && config.maxUserAnnotations) || 10,
-  getViewportUrlValues: () => viewportUrlService.getUrlValues(),
+  getViewportUrlValue: () => viewportUrlService.getUrlValue(),
   viewportParam: VIEWPORT_PARAM,
-  fitAllParam: FIT_ALL_PARAM,
   menuVisibleParam: MENU_VISIBLE_PARAM,
   filterHideTagsParam: FILTER_HIDE_TAGS_PARAM,
   filterQueryParam: FILTER_QUERY_PARAM,
@@ -6897,7 +6964,12 @@ const viewportService = window.createViewportService({
   getDiagramAspectRatio: () => diagramAspectRatio,
   getFitAllMode: () => fitAllMode,
   getFitGeometryMode: () => fitGeometryMode,
+  getCoverZoom: () => COVER_ZOOM,
+  getIsPanning: () => isPanning,
   getMinZoom: () => minZoom,
+  setMinZoom: (value) => {
+    minZoom = value;
+  },
   getCurrentZoom: () => currentZoom,
   setCurrentZoom: (value) => {
     currentZoom = value;
@@ -6962,6 +7034,7 @@ const viewportInputService = window.createViewportInputService({
   setCurrentZoom: (value) => {
     currentZoom = value;
   },
+  getCoverZoom: () => COVER_ZOOM,
   getMinZoom: () => minZoom,
   getMaxZoom: () => maxZoom,
   getImageTranslateX: () => imageTranslateX,
@@ -7147,6 +7220,7 @@ const appLifecycleService = window.createAppLifecycleService({
   centerImageAtCurrentZoom: () => viewportService.centerImageAtCurrentZoom(),
   getFitAllMode: () => fitAllMode,
   updateImageTransform: () => viewportService.updateImageTransform(),
+  getCoverZoom: () => COVER_ZOOM,
   restoreViewportFromUrl: () => viewportUrlService.restoreFromURL(),
   setFilterPanelOpen: (open) => filterPanelStateService.setFilterPanelOpen(open),
   renderAllMarkers: () => userAnnotationRenderService.renderAllMarkers(),
@@ -7518,12 +7592,6 @@ themeToggleBtn.addEventListener("click", () => {
   themeService.toggleTheme();
 });
 
-fitToViewportBtn.addEventListener("click", () => {
-  setFitAllMode(!fitAllMode);
-  armViewportUrlSync();
-});
-
-updateFitButtonState();
 
 filterPanelInputService.initialize();
 

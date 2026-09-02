@@ -17,7 +17,6 @@ const filterResultCount = document.getElementById("filter-result-count");
 const filterSearchInput = document.getElementById("filter-search-input");
 const filterTagControls = document.getElementById("filter-tag-controls");
 const openFilterPanelBtn = document.getElementById("floating-filter-toggle");
-const fitToViewportBtn = document.getElementById("floating-fit-toggle");
 const themeToggleBtn = document.getElementById("floating-theme-toggle");
 const closeFilterPanelBtn = document.getElementById("close-filter-panel");
 const resetFilterBtn = document.getElementById("filter-reset-btn");
@@ -34,7 +33,6 @@ if (
   !filterSearchInput ||
   !filterTagControls ||
   !openFilterPanelBtn ||
-  !fitToViewportBtn ||
   !themeToggleBtn ||
   !closeFilterPanelBtn ||
   !resetFilterBtn
@@ -45,10 +43,13 @@ if (
 
 let cachedBounds = null;
 
-// Zoom and pan variables
-let currentZoom = 1;
+// Zoom and pan variables. Zoom is relative to the cover fit, so COVER_ZOOM is
+// the scale at which the diagram exactly fills the viewport; minZoom drops
+// below it once the diagram is smaller than the viewport on one axis.
+const COVER_ZOOM = 1;
+let currentZoom = COVER_ZOOM;
 let maxZoom = 4;
-let minZoom = 1;
+let minZoom = COVER_ZOOM;
 let isPanning = false;
 let panStartX = 0;
 let panStartY = 0;
@@ -91,7 +92,6 @@ const FILTER_PINS_PARAM = "pins";
 const FILTER_CONSTRAINT_PARAM = "constraint";
 const FILTER_LEVEL_PARAM = "filter-level";
 const VIEWPORT_PARAM = "v";
-const FIT_ALL_PARAM = "fit";
 const VIEWPORT_URL_SYNC_DELAY = 400;
 const THEME_STORAGE_KEY = "kubesec-theme";
 const FILTER_DOCK_MIN_IMAGE_WIDTH = 1100;
@@ -136,17 +136,6 @@ function onFilterConstraintStateChanged() {
     svgHelpService.refreshPinnedStates();
   }
   urlStateService.updateURLState();
-}
-
-function updateFitButtonState() {
-  fitToViewportBtn.classList.toggle("active", fitAllMode);
-  fitToViewportBtn.setAttribute("aria-pressed", fitAllMode ? "true" : "false");
-  fitToViewportBtn.title = fitAllMode ? "Return to clipped view" : "Show full diagram";
-}
-
-function updateFitBackdropState() {
-  const keepBlackFrame = fitAllMode || pendingCoverSyncAfterFitExit;
-  document.body.classList.toggle("diagram-fit-blackframe", keepBlackFrame);
 }
 
 function captureViewportAnchor(clientX = null, clientY = null) {
@@ -232,7 +221,6 @@ function restoreViewportAnchor(anchor) {
 
 function disableFitAllKeepViewport(options = {}) {
   if (!fitAllMode) {
-    updateFitButtonState();
     return;
   }
 
@@ -308,7 +296,6 @@ function maybePromoteFitGeometryToCover(anchorClientX = null, anchorClientY = nu
   if (!pendingCoverSyncAfterFitExit) return false;
   if (fitGeometryMode !== "contain") {
     pendingCoverSyncAfterFitExit = false;
-    updateFitBackdropState();
     return false;
   }
   if (!isViewportFullyCoveredAtCurrentZoom()) {
@@ -323,7 +310,6 @@ function maybePromoteFitGeometryToCover(anchorClientX = null, anchorClientY = nu
 
   fitGeometryMode = "cover";
   pendingCoverSyncAfterFitExit = false;
-  updateFitBackdropState();
   viewportService.syncDiagramSize();
 
   const rectAfterSync = image.getBoundingClientRect();
@@ -363,13 +349,10 @@ function exitFitAllStateOnly() {
   fitAllRestoreState = null;
   pendingCoverSyncAfterFitExit = true;
   document.body.classList.remove("diagram-fit-all");
-  updateFitBackdropState();
-  updateFitButtonState();
 }
 
 function disableFitAllForInteraction(anchorClientX = null, anchorClientY = null) {
   if (!fitAllMode) {
-    updateFitButtonState();
     return;
   }
 
@@ -381,13 +364,11 @@ function disableFitAllForInteraction(anchorClientX = null, anchorClientY = null)
   viewportService.syncDiagramSize();
   restoreViewportAnchor(anchor);
   viewportService.updateImageTransform();
-  updateFitButtonState();
 }
 
 function setFitAllMode(enabled, options = {}) {
   const next = Boolean(enabled);
   if (fitAllMode === next) {
-    updateFitButtonState();
     return;
   }
 
@@ -413,7 +394,6 @@ function setFitAllMode(enabled, options = {}) {
     pendingCoverSyncAfterFitExit = false;
   }
   document.body.classList.toggle("diagram-fit-all", fitAllMode);
-  updateFitBackdropState();
 
   viewportService.syncDiagramSize();
   if (fitAllMode) {
@@ -432,7 +412,6 @@ function setFitAllMode(enabled, options = {}) {
     fitAllRestoreState = null;
   }
   viewportService.updateImageTransform();
-  updateFitButtonState();
 }
 
 function isRectValid(rect) {
@@ -876,11 +855,23 @@ if (typeof window.createViewportUrlService !== "function") {
   throw new Error("Missing viewport URL module");
 }
 
+// The starting view: cover zoom, anchored bottom-left. Anything else - zoomed
+// in, zoomed out past the edges, or panned - is a view worth putting in a link.
+function isDefaultViewport() {
+  if (fitAllMode) return false;
+  if (Math.abs(currentZoom - COVER_ZOOM) > 0.001) return false;
+
+  const translate = viewportService.getAlignmentTranslate("left", "bottom");
+  return (
+    Math.abs(imageTranslateX - translate.x) < 1 &&
+    Math.abs(imageTranslateY - translate.y) < 1
+  );
+}
+
 const viewportUrlService = window.createViewportUrlService({
   image,
   wrapper,
   viewportParam: VIEWPORT_PARAM,
-  fitAllParam: FIT_ALL_PARAM,
   getVisibleViewportBounds: () => getVisibleViewportBounds(),
   getCurrentZoom: () => currentZoom,
   setCurrentZoom: (value) => {
@@ -888,6 +879,7 @@ const viewportUrlService = window.createViewportUrlService({
   },
   getMinZoom: () => minZoom,
   getMaxZoom: () => maxZoom,
+  isDefaultViewport: () => isDefaultViewport(),
   getFitAllMode: () => fitAllMode,
   setFitAllMode: (enabled) => setFitAllMode(enabled),
   applyRawTransform: () => viewportService.applyRawTransform(),
@@ -935,9 +927,8 @@ const urlStateService = window.createUrlStateService({
   getDefaultSelectedLevel: () => maxDiagramLevel,
   getUserAnnotations: () => userAnnotations,
   getMaxUserAnnotations: () => (config && config.maxUserAnnotations) || 10,
-  getViewportUrlValues: () => viewportUrlService.getUrlValues(),
+  getViewportUrlValue: () => viewportUrlService.getUrlValue(),
   viewportParam: VIEWPORT_PARAM,
-  fitAllParam: FIT_ALL_PARAM,
   menuVisibleParam: MENU_VISIBLE_PARAM,
   filterHideTagsParam: FILTER_HIDE_TAGS_PARAM,
   filterQueryParam: FILTER_QUERY_PARAM,
@@ -970,7 +961,12 @@ const viewportService = window.createViewportService({
   getDiagramAspectRatio: () => diagramAspectRatio,
   getFitAllMode: () => fitAllMode,
   getFitGeometryMode: () => fitGeometryMode,
+  getCoverZoom: () => COVER_ZOOM,
+  getIsPanning: () => isPanning,
   getMinZoom: () => minZoom,
+  setMinZoom: (value) => {
+    minZoom = value;
+  },
   getCurrentZoom: () => currentZoom,
   setCurrentZoom: (value) => {
     currentZoom = value;
@@ -1035,6 +1031,7 @@ const viewportInputService = window.createViewportInputService({
   setCurrentZoom: (value) => {
     currentZoom = value;
   },
+  getCoverZoom: () => COVER_ZOOM,
   getMinZoom: () => minZoom,
   getMaxZoom: () => maxZoom,
   getImageTranslateX: () => imageTranslateX,
@@ -1220,6 +1217,7 @@ const appLifecycleService = window.createAppLifecycleService({
   centerImageAtCurrentZoom: () => viewportService.centerImageAtCurrentZoom(),
   getFitAllMode: () => fitAllMode,
   updateImageTransform: () => viewportService.updateImageTransform(),
+  getCoverZoom: () => COVER_ZOOM,
   restoreViewportFromUrl: () => viewportUrlService.restoreFromURL(),
   setFilterPanelOpen: (open) => filterPanelStateService.setFilterPanelOpen(open),
   renderAllMarkers: () => userAnnotationRenderService.renderAllMarkers(),
@@ -1591,12 +1589,6 @@ themeToggleBtn.addEventListener("click", () => {
   themeService.toggleTheme();
 });
 
-fitToViewportBtn.addEventListener("click", () => {
-  setFitAllMode(!fitAllMode);
-  armViewportUrlSync();
-});
-
-updateFitButtonState();
 
 filterPanelInputService.initialize();
 

@@ -1,4 +1,15 @@
 window.createViewportInputService = function createViewportInputService(deps) {
+  // Each wheel step changes the zoom by the same ratio, not the same amount.
+  // A fixed amount speeds up as the zoom drops - the diagram would appear to
+  // accelerate away exactly when it starts to letterbox. The ratio is small
+  // because the diagram is dense: fine steps keep detail readable while moving.
+  const ZOOM_STEP_RATIO = 1.0075;
+  // Scroll distance that counts as one zoom step. A slow trackpad event stays
+  // at a single step; flicking, or a mouse wheel notch, is worth many.
+  const WHEEL_DELTA_PER_STEP = 3;
+  const MAX_WHEEL_STEPS = 24;
+  const WHEEL_LINE_HEIGHT = 16;
+  const WHEEL_PAGE_HEIGHT = 400;
   let lastPinchDistance = 0;
   let lastPinchCenter = { x: 0, y: 0 };
   let isPinching = false;
@@ -8,6 +19,24 @@ window.createViewportInputService = function createViewportInputService(deps) {
   let resizeAnchorResetTimeout = null;
   let viewportInteractionStarted = false;
   let resizeSettleTimeout = null;
+
+  // Wheel deltas are reported in pixels, lines or pages depending on the
+  // device, so normalize before turning the distance into zoom steps.
+  function getWheelZoomSteps(event) {
+    let delta = Math.abs(event.deltaY);
+    if (event.deltaMode === 1) {
+      delta *= WHEEL_LINE_HEIGHT;
+    } else if (event.deltaMode === 2) {
+      delta *= WHEEL_PAGE_HEIGHT;
+    }
+
+    const steps = delta / WHEEL_DELTA_PER_STEP;
+    if (!Number.isFinite(steps)) {
+      return 1;
+    }
+
+    return Math.min(MAX_WHEEL_STEPS, Math.max(1, steps));
+  }
 
   function notifyViewportUserInput() {
     if (typeof deps.onViewportUserInput === "function") {
@@ -20,13 +49,15 @@ window.createViewportInputService = function createViewportInputService(deps) {
     const imageTranslateX = deps.getImageTranslateX();
     const imageTranslateY = deps.getImageTranslateY();
     deps.image.style.transform = `matrix(${currentZoom}, 0, 0, ${currentZoom}, ${imageTranslateX}, ${imageTranslateY})`;
-    deps.image.style.cursor = currentZoom > deps.getMinZoom() ? "grab" : "default";
+    deps.image.style.cursor = "grab";
   }
 
   function handleResize() {
     try {
       const currentZoom = deps.getCurrentZoom();
       const minZoom = deps.getMinZoom();
+      const coverZoom =
+        typeof deps.getCoverZoom === "function" ? deps.getCoverZoom() : minZoom;
 
       if (typeof deps.clearFilterHighlight === "function") {
         deps.clearFilterHighlight();
@@ -41,12 +72,14 @@ window.createViewportInputService = function createViewportInputService(deps) {
       ) {
         activeEl.blur();
       }
-      if (!viewportInteractionStarted && currentZoom <= minZoom + 0.001) {
+      if (!viewportInteractionStarted && currentZoom <= coverZoom + 0.001) {
         deps.updateFilterPanelLayout({
           skipImageTransform: true,
           disablePanelAnimation: true,
         });
-        if (typeof deps.getFitAllMode === "function" && deps.getFitAllMode()) {
+        const isFitAll = typeof deps.getFitAllMode === "function" && deps.getFitAllMode();
+        const isLetterboxed = currentZoom < coverZoom - 0.001;
+        if (isFitAll || isLetterboxed) {
           deps.centerImageAtCurrentZoom();
         } else if (typeof deps.alignImageAtCurrentZoom === "function") {
           deps.alignImageAtCurrentZoom("left", "bottom");
@@ -175,25 +208,28 @@ window.createViewportInputService = function createViewportInputService(deps) {
       return;
     }
 
-    let imageRect = deps.image.getBoundingClientRect();
-    let isOverImage =
-      e.clientX >= imageRect.left &&
-      e.clientX <= imageRect.right &&
-      e.clientY >= imageRect.top &&
-      e.clientY <= imageRect.bottom;
+    // Anywhere in the diagram area counts, including the empty space beside a
+    // letterboxed diagram - the anchor is clamped to the diagram below, so the
+    // wheel is never dead over a band of the screen.
+    const wrapperRect = deps.wrapper.getBoundingClientRect();
+    const isOverDiagramArea =
+      e.clientX >= wrapperRect.left &&
+      e.clientX <= wrapperRect.right &&
+      e.clientY >= wrapperRect.top &&
+      e.clientY <= wrapperRect.bottom;
 
-    if (!isOverImage) {
+    if (!isOverDiagramArea) {
       return;
     }
 
     e.preventDefault();
 
-    const zoomStep = 0.05;
     const imageRectBeforeZoom = deps.image.getBoundingClientRect();
+    const zoomFactor = ZOOM_STEP_RATIO ** getWheelZoomSteps(e);
     if (e.deltaY < 0) {
-      deps.setCurrentZoom(Math.min(oldZoom + zoomStep, deps.getMaxZoom()));
+      deps.setCurrentZoom(Math.min(oldZoom * zoomFactor, deps.getMaxZoom()));
     } else {
-      deps.setCurrentZoom(Math.max(oldZoom - zoomStep, deps.getMinZoom()));
+      deps.setCurrentZoom(Math.max(oldZoom / zoomFactor, deps.getMinZoom()));
     }
 
     const currentZoom = deps.getCurrentZoom();
@@ -204,8 +240,18 @@ window.createViewportInputService = function createViewportInputService(deps) {
     viewportInteractionStarted = true;
 
     const wrapperRectNow = deps.wrapper.getBoundingClientRect();
-    const anchorXOnWrapper = e.clientX - wrapperRectNow.left;
-    const anchorYOnWrapper = e.clientY - wrapperRectNow.top;
+    // Over the black band there is no diagram under the pointer, so anchor on
+    // the nearest point of the diagram instead of a point off its edge.
+    const anchorClientX = Math.min(
+      Math.max(e.clientX, imageRectBeforeZoom.left),
+      imageRectBeforeZoom.right,
+    );
+    const anchorClientY = Math.min(
+      Math.max(e.clientY, imageRectBeforeZoom.top),
+      imageRectBeforeZoom.bottom,
+    );
+    const anchorXOnWrapper = anchorClientX - wrapperRectNow.left;
+    const anchorYOnWrapper = anchorClientY - wrapperRectNow.top;
 
     const imageLeftOnWrapper = imageRectBeforeZoom.left - wrapperRectNow.left;
     const imageTopOnWrapper = imageRectBeforeZoom.top - wrapperRectNow.top;
@@ -239,7 +285,7 @@ window.createViewportInputService = function createViewportInputService(deps) {
     deps.updateImageTransform();
 
     if (typeof deps.maybePromoteFitGeometryToCover === "function") {
-      deps.maybePromoteFitGeometryToCover(e.clientX, e.clientY);
+      deps.maybePromoteFitGeometryToCover(anchorClientX, anchorClientY);
     }
 
     notifyViewportUserInput();
@@ -247,7 +293,6 @@ window.createViewportInputService = function createViewportInputService(deps) {
 
   function handleMouseDown(e) {
     if (isViewportLockedByMobileTooltip()) return;
-    if (!canPanAtCurrentZoom()) return;
     if (e.button !== 0) return;
     if (!deps.image.contains(e.target)) return;
 
@@ -293,8 +338,7 @@ window.createViewportInputService = function createViewportInputService(deps) {
     if (!deps.getIsPanning()) return;
 
     deps.setIsPanning(false);
-    deps.image.style.cursor =
-      deps.getCurrentZoom() > deps.getMinZoom() ? "grab" : "default";
+    deps.image.style.cursor = "grab";
     e.preventDefault();
     notifyViewportUserInput();
   }
@@ -310,30 +354,6 @@ window.createViewportInputService = function createViewportInputService(deps) {
       x: (touches[0].clientX + touches[1].clientX) / 2,
       y: (touches[0].clientY + touches[1].clientY) / 2,
     };
-  }
-
-  function canPanAtCurrentZoom() {
-    const currentZoom = deps.getCurrentZoom();
-    const displayedWidth = deps.image.offsetWidth || deps.image.clientWidth;
-    const displayedHeight = deps.image.offsetHeight || deps.image.clientHeight;
-    const wrapperStyles = window.getComputedStyle(deps.wrapper);
-    const padLeft = Number.parseFloat(wrapperStyles.paddingLeft) || 0;
-    const padRight = Number.parseFloat(wrapperStyles.paddingRight) || 0;
-    const padTop = Number.parseFloat(wrapperStyles.paddingTop) || 0;
-    const padBottom = Number.parseFloat(wrapperStyles.paddingBottom) || 0;
-    const viewportWidth = Math.max(
-      1,
-      (deps.wrapper.clientWidth || window.innerWidth) - padLeft - padRight,
-    );
-    const viewportHeight = Math.max(
-      1,
-      (deps.wrapper.clientHeight || window.innerHeight) - padTop - padBottom,
-    );
-
-    return (
-      displayedWidth * currentZoom > viewportWidth ||
-      displayedHeight * currentZoom > viewportHeight
-    );
   }
 
   function shouldIgnoreTouchEvent(e) {
@@ -413,7 +433,7 @@ window.createViewportInputService = function createViewportInputService(deps) {
       return;
     }
 
-    if (e.touches.length === 1 && !blockSingleTouchPan && canPanAtCurrentZoom()) {
+    if (e.touches.length === 1 && !blockSingleTouchPan) {
       if (typeof deps.getFitAllMode === "function" && deps.getFitAllMode()) {
         if (typeof deps.disableFitAllForInteraction === "function") {
           deps.disableFitAllForInteraction(

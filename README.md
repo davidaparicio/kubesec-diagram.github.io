@@ -21,6 +21,11 @@ It is made for the purpose stated above inside Telenor Norway. It doesn't reflec
 
 ## Changelog
 
+* v2026.09.2
+  * Better sharing of focus areas (zoom is in the url)
+  * Fullscreen mode is enabled if zoomed out (also in url)
+  * Better handling of zoom, you can now zoom out of bounds to see everything without clicking the fullscreen button.
+  * Fixing a scrollbug on mobile
 * v2026.09.1
   * Adding kubelet, scheduler, controller manager
   * Lots of additional ? marks with info

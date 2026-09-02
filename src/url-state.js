@@ -95,19 +95,11 @@ window.createUrlStateService = function createUrlStateService(deps) {
         url.searchParams.set("annotations", base64);
       }
 
-      const viewportValues =
-        typeof deps.getViewportUrlValues === "function"
-          ? deps.getViewportUrlValues()
-          : { fit: null, view: null };
+      const viewportValue =
+        typeof deps.getViewportUrlValue === "function" ? deps.getViewportUrlValue() : null;
 
-      if (viewportValues && viewportValues.fit) {
-        url.searchParams.set(deps.fitAllParam, viewportValues.fit);
-      } else {
-        url.searchParams.delete(deps.fitAllParam);
-      }
-
-      if (viewportValues && viewportValues.view) {
-        url.searchParams.set(deps.viewportParam, viewportValues.view);
+      if (viewportValue) {
+        url.searchParams.set(deps.viewportParam, viewportValue);
       } else {
         url.searchParams.delete(deps.viewportParam);
       }

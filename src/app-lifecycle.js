@@ -20,7 +20,9 @@ window.createAppLifecycleService = function createAppLifecycleService(deps) {
         typeof deps.restoreViewportFromUrl === "function" && deps.restoreViewportFromUrl();
 
       if (!restoredFromUrl) {
-        deps.setCurrentZoom(1);
+        deps.setCurrentZoom(
+          typeof deps.getCoverZoom === "function" ? deps.getCoverZoom() : 1,
+        );
         if (typeof deps.alignImageAtCurrentZoom === "function") {
           deps.alignImageAtCurrentZoom("left", "bottom");
         } else {

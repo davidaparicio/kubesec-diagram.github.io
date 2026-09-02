@@ -1,6 +1,6 @@
 window.createViewportUrlService = function createViewportUrlService(deps) {
-  const ZOOM_EPSILON = 0.001;
   const COORD_DECIMALS = 4;
+  const ZOOM_EPSILON = 0.001;
   // Breathing room added around a shared rect so it is not flush against
   // the viewport edges and the chrome that overlays the diagram.
   const RESTORE_PADDING = 0.03;
@@ -8,6 +8,10 @@ window.createViewportUrlService = function createViewportUrlService(deps) {
   // we give up on cover geometry and show the whole diagram instead.
   const MAX_COVER_SHORTFALL = 0.15;
   const CENTER_NUDGE_ITERATIONS = 3;
+  // Full zoom-out is worth a word rather than a rectangle covering the whole
+  // diagram. "0" is accepted as the same thing.
+  const FIT_VALUE = "fit";
+  const FIT_ALIASES = new Set([FIT_VALUE, "0"]);
 
   // Filter state is written to the URL during startup, long before the diagram
   // is on screen. Read the incoming view once so those writes cannot strip it,
@@ -165,51 +169,42 @@ window.createViewportUrlService = function createViewportUrlService(deps) {
     userControlled = true;
   }
 
-  function isZoomedIn() {
-    return deps.getCurrentZoom() > deps.getMinZoom() + ZOOM_EPSILON;
+  // Zoomed out as far as it goes, whichever way the reader got there.
+  function isFullyZoomedOut() {
+    return deps.getFitAllMode() || deps.getCurrentZoom() <= deps.getMinZoom() + ZOOM_EPSILON;
   }
 
-  // Coordinates are only worth sharing when the sender picked a view:
-  // at full zoom-out the visible rect is a property of their screen, not
-  // of the diagram, so the receiver is better off with their own default.
-  function getUrlValues() {
+  // Coordinates are only worth sharing when the sender picked a view: in the
+  // default view the visible rect is a property of their screen, not of the
+  // diagram, so the receiver is better off with their own default.
+  function getUrlValue() {
     if (!userControlled) {
       const incoming = getIncomingState();
-      return {
-        fit: incoming.fitAll ? "1" : null,
-        view: incoming.rect ? serializeRect(incoming.rect) : null,
-      };
+      if (incoming.fit) return FIT_VALUE;
+      return incoming.rect ? serializeRect(incoming.rect) : null;
     }
 
-    if (deps.getFitAllMode()) {
-      return { fit: "1", view: null };
+    if (deps.isDefaultViewport()) {
+      return null;
     }
 
-    if (!isZoomedIn()) {
-      return { fit: null, view: null };
+    if (isFullyZoomedOut()) {
+      return FIT_VALUE;
     }
 
     const rect = getVisibleDiagramRect(true);
-    if (!rect) {
-      return { fit: null, view: null };
-    }
-
-    return { fit: null, view: serializeRect(rect) };
+    return rect ? serializeRect(rect) : null;
   }
 
   function parseFromURL() {
     try {
-      const urlParams = new URLSearchParams(window.location.search);
-      const fitRaw = urlParams.get(deps.fitAllParam);
-      const fitAll = fitRaw === "1" || fitRaw === "true";
+      const raw = new URLSearchParams(window.location.search).get(deps.viewportParam);
+      const fit = typeof raw === "string" && FIT_ALIASES.has(raw.trim().toLowerCase());
 
-      return {
-        fitAll,
-        rect: fitAll ? null : parseRect(urlParams.get(deps.viewportParam)),
-      };
+      return { fit, rect: fit ? null : parseRect(raw) };
     } catch (error) {
       console.warn("Failed to parse viewport state from URL:", error);
-      return { fitAll: false, rect: null };
+      return { fit: false, rect: null };
     }
   }
 
@@ -270,7 +265,7 @@ window.createViewportUrlService = function createViewportUrlService(deps) {
   function restoreFromURL() {
     const state = getIncomingState();
 
-    if (state.fitAll) {
+    if (state.fit) {
       deps.setFitAllMode(true);
       return true;
     }
@@ -283,7 +278,7 @@ window.createViewportUrlService = function createViewportUrlService(deps) {
   }
 
   return {
-    getUrlValues,
+    getUrlValue,
     markUserControlled,
     parseFromURL,
     restoreFromURL,
