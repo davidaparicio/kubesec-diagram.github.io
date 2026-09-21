@@ -21,6 +21,12 @@ It is made for the purpose stated above inside Telenor Norway. It doesn't reflec
 
 ## Changelog
 
+* v2026.09.4
+  * Minor style fixes
+  * Adding some common logsources
+  * More details about images
+  * Adding node-context box with info about hubble, runtime security, ...
+  * More boxes that sends to logging
 * v2026.09.3
   * Cleanup service-owner and operator access
   * Minor cleanups on the left side of the diagram
