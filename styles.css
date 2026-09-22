@@ -303,13 +303,10 @@ body.mobile-tooltip-open::before {
     right: 0;
     top: 0;
     display: flex;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     justify-content: flex-end;
     gap: 4px;
     max-width: 56%;
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-width: thin;
 }
 
 .tooltip-box .annotation-tag-badges.tooltip-tag-badges {
@@ -318,8 +315,6 @@ body.mobile-tooltip-open::before {
     right: auto !important;
     justify-content: flex-start;
     max-width: 100%;
-    overflow-x: auto;
-    overflow-y: hidden;
 }
 
 .tooltip-box .annotation-tag-badges.tooltip-tag-badges .annotation-tag-badge {
@@ -2171,13 +2166,6 @@ body.mobile-tooltip-open .mobile-go-to-indicator {
 
     .tooltip-box.mobile-tooltip .tooltip-tag-wrap {
         flex: 1 1 auto;
-    }
-
-    .tooltip-box.mobile-tooltip .tooltip-tag-badges {
-        flex-wrap: wrap;
-        overflow-x: hidden;
-        overflow-y: auto;
-        max-height: 64px;
     }
 
     .tooltip-box.mobile-tooltip .tooltip-pin-btn {
