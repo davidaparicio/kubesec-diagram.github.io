@@ -26,6 +26,10 @@ window.createFilterPanelStateService = function createFilterPanelStateService(de
     updateFilterPanelLayout();
 
     if (isOpen) {
+      // The tag tree cannot measure its own space while the panel is closed,
+      // so its default expansion is decided the first time it is visible.
+      deps.refreshTagTreeDefaultState();
+
       if (!isMobileLayout()) {
         pendingFocusTimeout = setTimeout(() => {
           pendingFocusTimeout = null;

@@ -45,16 +45,22 @@ window.createUserAnnotationListService = function createUserAnnotationListServic
       item.className = "user-annotation-item";
 
       const style = deps.getUserAnnotationStyle(ann.type) || {};
-      const isArea = style.annotationType === "area";
-      const shapeIcon = ann.shape === "circle" ? "●" : "■";
-      const modeIcon = isArea ? "⬛" : "●";
+      const isArrow = style.annotationType === "arrow";
+      // An arrow has no fill and no shape, so a colour swatch says nothing
+      // about it. Draw the arrow itself, exactly as the type picker does.
+      const indicatorHtml = isArrow
+        ? '<div class="type-indicator type-indicator-arrow"></div>'
+        : `<div class="type-indicator" style="background: ${style.bg}; border-color: ${style.border}; border-radius: ${ann.shape === "circle" ? "50%" : "4px"};"></div>`;
+      const title = `${ann.title || ""}`.trim();
+      const titleHtml = title
+        ? deps.escapeHTML(title)
+        : '<em class="annotation-title-empty">Untitled</em>';
 
       item.innerHTML = `
             <div class="annotation-item-row">
-                <div class="type-indicator" style="background: ${style.bg}; border-color: ${style.border}; border-radius: ${ann.shape === "circle" ? "50%" : "4px"};"></div>
+                ${indicatorHtml}
                 <div class="annotation-info">
-                    <span class="annotation-title">${deps.escapeHTML(ann.title)}</span>
-                    <span class="annotation-meta">${modeIcon} ${shapeIcon}</span>
+                    <span class="annotation-title">${titleHtml}</span>
                 </div>
                 <div class="annotation-actions">
                     <button class="action-btn edit-btn desktop-only" data-action="edit" title="Edit">✏️</button>
@@ -68,6 +74,11 @@ window.createUserAnnotationListService = function createUserAnnotationListServic
         editBtn.addEventListener("click", () => {
           showEditAnnotationForm(index);
         });
+      }
+
+      if (isArrow) {
+        const indicator = item.querySelector(".type-indicator-arrow");
+        if (indicator) indicator.appendChild(deps.createArrowSwatch(style));
       }
 
       const deleteBtn = item.querySelector('[data-action="delete"]');

@@ -31,6 +31,22 @@ window.createFilterPanelInputService = function createFilterPanelInputService(de
       deps.updateURLState();
     });
 
+    // An <input type="search"> wipes itself on Escape without firing "input",
+    // so the box went empty while the filter it described stayed applied.
+    // Keep the text; Escape still closes the panel via the handler below.
+    deps.filterSearchInput.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+    });
+
+    // Belt and braces: some engines clear on Escape through a "search" event
+    // rather than the default action preventDefault can stop.
+    deps.filterSearchInput.addEventListener("search", () => {
+      const query = deps.getAnnotationSearchQuery() || "";
+      if (deps.filterSearchInput.value === query) return;
+      deps.filterSearchInput.value = query;
+    });
+
     deps.resetFilterBtn.addEventListener("click", () => {
       deps.setAnnotationSearchQuery("");
       deps.filterSearchInput.value = "";

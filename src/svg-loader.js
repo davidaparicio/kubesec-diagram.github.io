@@ -1,4 +1,24 @@
 window.createSvgLoaderService = function createSvgLoaderService(deps) {
+  // requestAnimationFrame never fires in a hidden tab, so a page opened in the
+  // background would sit on "Loading diagram..." until focused. Run the
+  // callback on the first of rAF, a timeout, or the tab becoming visible.
+  function scheduleOnceWhenRenderable(callback) {
+    let done = false;
+    const run = () => {
+      if (done) return;
+      done = true;
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      callback();
+    };
+    const onVisibilityChange = () => {
+      if (!document.hidden) run();
+    };
+
+    requestAnimationFrame(run);
+    setTimeout(run, 250);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+  }
+
   async function loadDiagram(diagramSourcePath) {
     try {
       const response = await fetch(diagramSourcePath, { cache: "no-cache" });
@@ -40,7 +60,7 @@ window.createSvgLoaderService = function createSvgLoaderService(deps) {
       deps.initializeSvgPropertyAnnotations();
       deps.initializeTagControls();
       deps.updateFilterPanelLayout();
-      requestAnimationFrame(() => deps.handleImageLoad());
+      scheduleOnceWhenRenderable(() => deps.handleImageLoad());
     } catch (error) {
       deps.handleImageError(error);
     }

@@ -180,6 +180,25 @@ window.createViewportService = function createViewportService(deps) {
   // One bound for both cases: the diagram overflowing the viewport and the
   // diagram sitting inside it. Both ends move continuously with the zoom, so
   // there is no point where the view snaps sideways.
+  //
+  // Three simpler designs were tried first and all three broke visibly. Before
+  // simplifying this, check the change is not one of them:
+  //
+  //   1. Centre the empty space (`gap / 2`). Both black bands then move in
+  //      step, so zooming in on something near an edge eats the band first and
+  //      drags the target towards the middle - the point under the pointer
+  //      does not stay put.
+  //   2. Let the diagram's midpoint be the only limit (half of it may leave
+  //      the viewport). The translate then sits outside the strict range, and
+  //      the instant the diagram grows past the viewport the overflow bound
+  //      snaps it back in one frame. It also allows panning far too far out.
+  //   3. Scale the slack with the *current* gap instead of the zoom-floor gap.
+  //      The allowance grows and shrinks as you zoom, so the clamp keeps
+  //      releasing and re-binding: 85-108px jumps per wheel step.
+  //
+  // What makes the current version work: the slack is constant for a layout
+  // (so the bound moves smoothly with the zoom), and it fades to zero at the
+  // zoom floor (so full zoom-out still shows every edge).
   function getPanRange(viewportSize, scaledSize, displayedSize) {
     const gap = viewportSize - scaledSize;
     const minZoom = deps.getMinZoom();

@@ -1,19 +1,34 @@
 window.createUserAnnotationInitService = function createUserAnnotationInitService(
   deps,
 ) {
+  const MODE_TYPE_PREFIX = { point: "user-", area: "area-", arrow: "arrow-" };
+
+  function getTypePrefixForMode(mode) {
+    return MODE_TYPE_PREFIX[mode] || MODE_TYPE_PREFIX.point;
+  }
+
+  // Shape only means something for a box or a marker; an arrow has no shape.
+  function updateShapeSelectorVisibility() {
+    const shapeGroup = document.querySelector(".shape-selector-group");
+    if (shapeGroup) {
+      shapeGroup.hidden = deps.getCurrentMode() === "arrow";
+    }
+  }
+
   function updateUserAnnotationTypeOptions(typeSelector) {
     typeSelector.innerHTML = "";
+    updateShapeSelectorVisibility();
 
     const cfg = deps.getConfig();
     if (cfg && cfg.userAnnotationTypes) {
       const uniqueTypes = new Set();
       Object.keys(cfg.userAnnotationTypes).forEach((type) => {
-        const baseType = type.replace(/^(user-|area-)/, "");
+        const baseType = type.replace(/^(user-|area-|arrow-)/, "");
         uniqueTypes.add(baseType);
       });
 
       uniqueTypes.forEach((baseType) => {
-        const prefix = deps.getCurrentMode() === "area" ? "area-" : "user-";
+        const prefix = getTypePrefixForMode(deps.getCurrentMode());
         const fullTypeKey = prefix + baseType;
         const style = cfg.userAnnotationTypes[fullTypeKey];
         if (!style) return;
@@ -27,7 +42,10 @@ window.createUserAnnotationInitService = function createUserAnnotationInitServic
         const circleBtn = document.getElementById("shape-circle");
         const isCircleShape = circleBtn && circleBtn.classList.contains("active");
 
-        if (deps.getCurrentMode() === "area") {
+        if (deps.getCurrentMode() === "arrow") {
+          typeBtn.classList.add("type-btn-arrow");
+          typeBtn.appendChild(deps.createArrowSwatch(style));
+        } else if (deps.getCurrentMode() === "area") {
           typeBtn.style.background = "transparent";
           typeBtn.style.borderColor = style.border;
           typeBtn.style.borderWidth = style.borderWidth || "3px";
@@ -72,41 +90,55 @@ window.createUserAnnotationInitService = function createUserAnnotationInitServic
     deps.updateInlineFormValidation();
   }
 
+  const ANNOTATION_KIND_LABEL = { point: "Point", area: "Area", arrow: "Arrow" };
+
+  // The same colour name exists for a point, an area and an arrow, so a list of
+  // bare labels held three identical "Red Solid" entries. Group by kind.
   function populateEditTypeOptions(editTypeSelect) {
     const cfg = deps.getConfig();
     if (!cfg || !cfg.userAnnotationTypes) return;
 
+    const groups = new Map();
     Object.entries(cfg.userAnnotationTypes).forEach(([type, style]) => {
-      const option = document.createElement("option");
-      option.value = type;
-      option.textContent = style.label;
-      editTypeSelect.appendChild(option.cloneNode(true));
+      const kind = style.annotationType || "point";
+      if (!groups.has(kind)) groups.set(kind, []);
+      groups.get(kind).push([type, style]);
+    });
+
+    ["point", "area", "arrow"].forEach((kind) => {
+      const entries = groups.get(kind);
+      if (!entries || entries.length === 0) return;
+
+      const kindLabel = ANNOTATION_KIND_LABEL[kind] || kind;
+      const group = document.createElement("optgroup");
+      group.label = kindLabel;
+      entries.forEach(([type, style]) => {
+        const option = document.createElement("option");
+        option.value = type;
+        option.textContent = `${kindLabel} · ${style.label}`;
+        group.appendChild(option);
+      });
+      editTypeSelect.appendChild(group);
     });
   }
 
   function bindModeAndShapeSelectors(typeSelector) {
-    const pointModeBtn = document.getElementById("mode-point");
-    const areaModeBtn = document.getElementById("mode-area");
+    const modeButtons = [
+      ["point", document.getElementById("mode-point")],
+      ["area", document.getElementById("mode-area")],
+      ["arrow", document.getElementById("mode-arrow")],
+    ].filter(([, button]) => Boolean(button));
     const rectangleBtn = document.getElementById("shape-rectangle");
     const circleBtn = document.getElementById("shape-circle");
 
-    if (pointModeBtn && areaModeBtn) {
-      pointModeBtn.addEventListener("click", () => {
-        deps.setCurrentMode("point");
-        pointModeBtn.classList.add("active");
-        areaModeBtn.classList.remove("active");
+    modeButtons.forEach(([mode, button]) => {
+      button.addEventListener("click", () => {
+        deps.setCurrentMode(mode);
+        modeButtons.forEach(([, other]) => other.classList.toggle("active", other === button));
         updateUserAnnotationTypeOptions(typeSelector);
         deps.updateInlineFormValidation();
       });
-
-      areaModeBtn.addEventListener("click", () => {
-        deps.setCurrentMode("area");
-        areaModeBtn.classList.add("active");
-        pointModeBtn.classList.remove("active");
-        updateUserAnnotationTypeOptions(typeSelector);
-        deps.updateInlineFormValidation();
-      });
-    }
+    });
 
     if (rectangleBtn && circleBtn) {
       rectangleBtn.addEventListener("click", () => {
@@ -140,12 +172,9 @@ window.createUserAnnotationInitService = function createUserAnnotationInitServic
         deps.clearInlineForm();
 
         deps.setCurrentMode("area");
-        const areaModeBtn = document.getElementById("mode-area");
-        const pointModeBtn = document.getElementById("mode-point");
-        if (areaModeBtn && pointModeBtn) {
-          areaModeBtn.classList.add("active");
-          pointModeBtn.classList.remove("active");
-        }
+        document.querySelectorAll(".mode-selector .mode-btn").forEach((btn) => {
+          btn.classList.toggle("active", btn.id === "mode-area");
+        });
 
         const rectangleBtn = document.getElementById("shape-rectangle");
         const circleBtn = document.getElementById("shape-circle");
@@ -212,7 +241,7 @@ window.createUserAnnotationInitService = function createUserAnnotationInitServic
       const description = document.getElementById("inline-description").value;
       const mode = deps.getCurrentMode();
 
-      if (!title || !type || !mode) return;
+      if (!type || !mode) return;
 
       let shape = "rectangle";
       const circleBtn = document.getElementById("shape-circle");
@@ -220,8 +249,7 @@ window.createUserAnnotationInitService = function createUserAnnotationInitServic
         shape = "circle";
       }
 
-      const prefix = mode === "area" ? "area-" : "user-";
-      const fullType = prefix + type;
+      const fullType = getTypePrefixForMode(mode) + type;
 
       const annotationData = {
         title: title.substring(0, 50),

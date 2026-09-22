@@ -16,23 +16,33 @@ window.createUserAnnotationRenderService = function createUserAnnotationRenderSe
       if (el.parentElement) el.parentElement.remove();
     });
 
+    document
+      .querySelectorAll(".arrow-annotation-wrapper")
+      .forEach((el) => el.remove());
+
     deps.getUserAnnotations().forEach((ann) => {
       delete ann._el;
       delete ann._tooltip;
       delete ann._index;
+      delete ann._arrow;
     });
   }
 
+  // Title and description are both optional now, so an annotation can have
+  // nothing to say - in which case it gets no tooltip rather than an empty box.
   function createAnnotationTooltip(ann) {
+    const title = `${ann.title || ""}`.trim();
+    const description = `${ann.description || ""}`.trim();
+    if (!title && !description) return null;
+
     const tooltip = document.createElement("div");
     tooltip.className = "tooltip-box user-annotation-tooltip";
 
-    const description = ann.description && ann.description.trim();
-    if (description) {
-      tooltip.innerHTML = `<b>${deps.escapeHTML(ann.title)}</b><br><br>${deps.processUserDescription(ann.description)}`;
-    } else {
-      tooltip.innerHTML = `<b>${deps.escapeHTML(ann.title)}</b>`;
-    }
+    const titleHtml = title ? `<b>${deps.escapeHTML(title)}</b>` : "";
+    const separator = title && description ? "<br><br>" : "";
+    tooltip.innerHTML = `${titleHtml}${separator}${
+      description ? deps.processUserDescription(ann.description) : ""
+    }`;
 
     tooltip.style.display = "none";
     tooltip.style.whiteSpace = "pre-wrap";
@@ -63,7 +73,9 @@ window.createUserAnnotationRenderService = function createUserAnnotationRenderSe
     const tooltip = createAnnotationTooltip(ann);
 
     wrapperEl.offsetHeight;
-    deps.addPointAnnotationHoverEvents(wrapperEl, tooltip, ann);
+    if (tooltip) {
+      deps.addPointAnnotationHoverEvents(wrapperEl, tooltip, ann);
+    }
     deps.addUserAnnotationDragListeners(wrapperEl, marker, index);
 
     wrapperEl.appendChild(marker);
@@ -104,7 +116,9 @@ window.createUserAnnotationRenderService = function createUserAnnotationRenderSe
 
     const tooltip = createAnnotationTooltip(ann);
     areaElement.offsetHeight;
-    deps.addAreaAnnotationHoverEvents(areaElement, tooltip, ann);
+    if (tooltip) {
+      deps.addAreaAnnotationHoverEvents(areaElement, tooltip, ann);
+    }
     deps.addAreaAnnotationDragListeners(wrapperEl, areaElement, index);
 
     wrapperEl.appendChild(areaElement);
@@ -120,7 +134,9 @@ window.createUserAnnotationRenderService = function createUserAnnotationRenderSe
       const style = deps.getUserAnnotationStyle(ann.type);
       if (!style) return;
 
-      if (style.annotationType === "area") {
+      if (style.annotationType === "arrow") {
+        deps.renderArrowAnnotation(ann, index, style, createAnnotationTooltip(ann));
+      } else if (style.annotationType === "area") {
         renderAreaAnnotation(ann, index, style);
       } else {
         renderPointAnnotation(ann, index, style);

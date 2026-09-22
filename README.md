@@ -22,11 +22,17 @@ It is made for the purpose stated above inside Telenor Norway. It doesn't reflec
 ## Changelog
 
 * v2026.09.4
-  * Minor style fixes
-  * Adding some common logsources
-  * More details about images
+  * Total redesign and remapping of tags, levels and slugs. Big cleanup
+  * Many fixes how tags are represented
+  * Many minor improvements and fixes on visuals, layout and style
+  * Adding some common logsources in drawing
+  * More details about container images
   * Adding node-context box with info about hubble, runtime security, ...
   * More boxes that sends to logging
+  * Hotkeys, info box that shows if entering site without url parameter
+  * Better pinning visuals
+  * Arrows annotations
+  * ? mark menu that contains hotkeys and some url info
 * v2026.09.3
   * Cleanup service-owner and operator access
   * Minor cleanups on the left side of the diagram

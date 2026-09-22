@@ -213,6 +213,15 @@
             </div>
             <span class="footer-meta">
                 <span class="version">v2026.09.4</span>
+                <button
+                    id="about-toggle"
+                    class="footer-help-btn"
+                    type="button"
+                    aria-label="About this diagram"
+                    title="About this diagram"
+                >
+                    ?
+                </button>
             </span>
         </div>
 
@@ -245,13 +254,12 @@
                             <div class="form-row">
                                 <div class="form-group">
                                     <label for="inline-title"
-                                        >Title (required):</label
+                                        >Title (optional):</label
                                     >
                                     <input
                                         type="text"
                                         id="inline-title"
                                         maxlength="50"
-                                        required
                                     />
                                     <small class="char-count"
                                         ><span id="inline-title-count">0</span
@@ -284,6 +292,17 @@
                                                 class="mode-icon area-icon"
                                             ></div>
                                             <span>Area</span>
+                                        </button>
+                                        <button
+                                            type="button"
+                                            id="mode-arrow"
+                                            class="mode-btn arrow-btn"
+                                            title="Arrow: click the tail, then the head"
+                                        >
+                                            <div
+                                                class="mode-icon arrow-icon"
+                                            ></div>
+                                            <span>Arrow</span>
                                         </button>
                                     </div>
                                 </div>
@@ -402,13 +421,8 @@
                 <div class="modal-body">
                     <form id="edit-annotation-form">
                         <div class="form-group">
-                            <label for="edit-title">Title (required):</label>
-                            <input
-                                type="text"
-                                id="edit-title"
-                                maxlength="50"
-                                required
-                            />
+                            <label for="edit-title">Title (optional):</label>
+                            <input type="text" id="edit-title" maxlength="50" />
                             <small class="char-count"
                                 ><span id="edit-title-count">0</span>/50</small
                             >
@@ -444,6 +458,95 @@
                             </button>
                         </div>
                     </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- About Modal -->
+        <div id="about-modal" class="modal" style="display: none">
+            <div class="modal-content about-modal-content">
+                <div class="modal-header">
+                    <h3>Kubernetes security diagram</h3>
+                    <button id="close-about-modal" class="close-button">
+                        &times;
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <p>
+                        An opinionated, on-prem oriented map of where security
+                        happens in a Kubernetes cluster. It is a thinking aid,
+                        not a checklist or a reference architecture.
+                    </p>
+                    <ul class="about-list">
+                        <li>Scroll to zoom, drag to pan.</li>
+                        <li>
+                            <strong>?</strong> markers explain the thing they
+                            sit on — hover or tap them.
+                        </li>
+                        <li>
+                            The menu filters by level and by tag, and searches
+                            every explanation.
+                        </li>
+                        <li>
+                            The link in your address bar carries your view —
+                            copy it to share exactly what you see.
+                        </li>
+                        <li>Press <kbd>?</kbd> for keyboard shortcuts.</li>
+                    </ul>
+                    <p class="about-footnote">
+                        More detail, the source diagram and the AI-usage note
+                        are on
+                        <a
+                            href="https://github.com/kubesec-diagram/kubesec-diagram.github.io"
+                            target="_blank"
+                            >GitHub</a
+                        >.
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Keyboard Shortcuts Modal -->
+        <div id="shortcut-modal" class="modal" style="display: none">
+            <div class="modal-content shortcut-modal-content">
+                <div class="modal-header">
+                    <h3>Keyboard shortcuts</h3>
+                    <button id="close-shortcut-modal" class="close-button">
+                        &times;
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <table class="shortcut-table">
+                        <tbody>
+                            <tr>
+                                <th scope="row"><kbd>/</kbd></th>
+                                <td>Focus search</td>
+                            </tr>
+                            <tr>
+                                <th scope="row">
+                                    <kbd>&larr;</kbd> <kbd>&rarr;</kbd>
+                                    <kbd>&uarr;</kbd> <kbd>&darr;</kbd>
+                                </th>
+                                <td>Pan (hold <kbd>Shift</kbd> to pan far)</td>
+                            </tr>
+                            <tr>
+                                <th scope="row"><kbd>+</kbd> <kbd>-</kbd></th>
+                                <td>Zoom in / out</td>
+                            </tr>
+                            <tr>
+                                <th scope="row"><kbd>0</kbd></th>
+                                <td>Fit the whole diagram</td>
+                            </tr>
+                            <tr>
+                                <th scope="row"><kbd>?</kbd></th>
+                                <td>This list</td>
+                            </tr>
+                            <tr>
+                                <th scope="row"><kbd>Esc</kbd></th>
+                                <td>Close</td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>

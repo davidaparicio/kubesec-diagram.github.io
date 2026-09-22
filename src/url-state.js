@@ -7,10 +7,26 @@ window.createUrlStateService = function createUrlStateService(deps) {
   }
 
   function serializeFilterState() {
-    const hiddenTags = deps
-      .getTagVisibilityEntries()
-      .filter(([, visible]) => visible === false)
-      .map(([tag]) => tag)
+    const explicitlyHidden = new Set(
+      deps
+        .getTagVisibilityEntries()
+        .filter(([, visible]) => visible === false)
+        .map(([tag]) => tag),
+    );
+
+    // A hidden parent already hides its branch, so naming the children as well
+    // only makes the link longer and says nothing extra.
+    const hasHiddenAncestor = (tag) => {
+      let parent = deps.getTagParent(tag);
+      while (parent) {
+        if (explicitlyHidden.has(parent)) return true;
+        parent = deps.getTagParent(parent);
+      }
+      return false;
+    };
+
+    const hiddenTags = Array.from(explicitlyHidden)
+      .filter((tag) => !hasHiddenAncestor(tag))
       .sort((a, b) => deps.compareTagsByFilterOrder(a, b));
 
     return {
@@ -19,6 +35,7 @@ window.createUrlStateService = function createUrlStateService(deps) {
       hiddenTags,
       pinnedSlugs: deps.getPinnedSlugs(),
       constraints: deps.getFilterConstraints(),
+      tagsExpanded: Boolean(deps.getTagTreeExpanded()),
       level:
         typeof deps.getSelectedLevel === "function"
           ? Math.max(0, Number.parseInt(deps.getSelectedLevel(), 10) || 0)
@@ -35,6 +52,7 @@ window.createUrlStateService = function createUrlStateService(deps) {
       const pinsRaw = urlParams.get(deps.pinsParam);
       const constraintsRaw = urlParams.get(deps.constraintParam);
       const levelRaw = urlParams.get(deps.filterLevelParam);
+      const tagsRaw = urlParams.get(deps.tagsExpandedParam);
 
       const hiddenTags = hideTagsRaw
         ? hideTagsRaw
@@ -66,6 +84,7 @@ window.createUrlStateService = function createUrlStateService(deps) {
         level: Math.max(0, Number.parseInt(levelRaw, 10) || 0),
         hasLevel: levelRaw !== null,
         hasHiddenTags: hideTagsRaw !== null,
+        tagsExpanded: tagsRaw === "open",
       };
     } catch (error) {
       console.warn("Failed to parse filter state from URL:", error);
@@ -78,6 +97,7 @@ window.createUrlStateService = function createUrlStateService(deps) {
         level: 0,
         hasLevel: false,
         hasHiddenTags: false,
+        tagsExpanded: false,
       };
     }
   }
@@ -90,7 +110,11 @@ window.createUrlStateService = function createUrlStateService(deps) {
       if (!userAnnotations || userAnnotations.length === 0) {
         url.searchParams.delete("annotations");
       } else {
-        const jsonString = JSON.stringify(userAnnotations);
+        const jsonString = JSON.stringify(userAnnotations, (key, value) =>
+          // Rendered DOM (_el, _tooltip, _arrow, ...) is runtime state, not
+          // part of the shared link.
+          key.startsWith("_") ? undefined : value,
+        );
         const base64 = btoa(unescape(encodeURIComponent(jsonString)));
         url.searchParams.set("annotations", base64);
       }
@@ -115,7 +139,9 @@ window.createUrlStateService = function createUrlStateService(deps) {
           ? Math.max(0, Number.parseInt(deps.getDefaultSelectedLevel(), 10) || 0)
           : 0;
       const hasNonDefaultLevel = level !== defaultLevel;
-      const hasFilterCriteria = query.length > 0 || hiddenTags.length > 0 || hasNonDefaultLevel;
+      const tagsExpanded = Boolean(filterState.tagsExpanded);
+      const hasFilterCriteria =
+        query.length > 0 || hiddenTags.length > 0 || hasNonDefaultLevel || tagsExpanded;
 
       if (
         !filterState.visible &&
@@ -129,6 +155,7 @@ window.createUrlStateService = function createUrlStateService(deps) {
         url.searchParams.delete(deps.pinsParam);
         url.searchParams.delete(deps.constraintParam);
         url.searchParams.delete(deps.filterLevelParam);
+        url.searchParams.delete(deps.tagsExpandedParam);
       } else {
         if (filterState.visible) {
           url.searchParams.set(deps.menuVisibleParam, "true");
@@ -164,6 +191,12 @@ window.createUrlStateService = function createUrlStateService(deps) {
           url.searchParams.set(deps.filterLevelParam, `${level}`);
         } else {
           url.searchParams.delete(deps.filterLevelParam);
+        }
+
+        if (tagsExpanded) {
+          url.searchParams.set(deps.tagsExpandedParam, "open");
+        } else {
+          url.searchParams.delete(deps.tagsExpandedParam);
         }
       }
 
@@ -204,12 +237,13 @@ window.createUrlStateService = function createUrlStateService(deps) {
             typeof ann.x === "number" &&
             typeof ann.y === "number" &&
             typeof ann.type === "string" &&
-            typeof ann.title === "string" &&
+            // Title is optional; reject only a wrong type or an over-long one.
+            (ann.title === undefined ||
+              (typeof ann.title === "string" && ann.title.length <= 50)) &&
             ann.x >= 0 &&
             ann.x <= 1 &&
             ann.y >= 0 &&
-            ann.y <= 1 &&
-            ann.title.length <= 50
+            ann.y <= 1
           );
         })
         .map((ann) => {
@@ -217,7 +251,7 @@ window.createUrlStateService = function createUrlStateService(deps) {
             x: ann.x,
             y: ann.y,
             type: ann.type,
-            title: ann.title.substring(0, 50),
+            title: `${ann.title || ""}`.substring(0, 50),
             description: ann.description ? ann.description.substring(0, 500) : "",
           };
 
@@ -235,6 +269,19 @@ window.createUrlStateService = function createUrlStateService(deps) {
           }
           if (typeof ann.heightRel === "number" && ann.heightRel > 0) {
             cleanAnn.heightRel = ann.heightRel;
+          }
+
+          // An arrow carries a second point: x/y is the tail, x2/y2 the head.
+          if (
+            typeof ann.x2 === "number" &&
+            typeof ann.y2 === "number" &&
+            ann.x2 >= 0 &&
+            ann.x2 <= 1 &&
+            ann.y2 >= 0 &&
+            ann.y2 <= 1
+          ) {
+            cleanAnn.x2 = ann.x2;
+            cleanAnn.y2 = ann.y2;
           }
 
           return cleanAnn;

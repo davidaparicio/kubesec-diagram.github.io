@@ -91,9 +91,11 @@ const FILTER_QUERY_PARAM = "filter-query";
 const FILTER_PINS_PARAM = "pins";
 const FILTER_CONSTRAINT_PARAM = "constraint";
 const FILTER_LEVEL_PARAM = "filter-level";
+const TAGS_EXPANDED_PARAM = "tags";
 const VIEWPORT_PARAM = "v";
 const VIEWPORT_URL_SYNC_DELAY = 400;
 const THEME_STORAGE_KEY = "kubesec-theme";
+const ABOUT_STORAGE_KEY = "kubesec-about";
 const FILTER_DOCK_MIN_IMAGE_WIDTH = 1100;
 const FILTER_SEARCH_PLACEHOLDER_DEFAULT = "Search annotations...";
 
@@ -128,6 +130,7 @@ function normalizePinnedHelpSlugs() {
 }
 
 function onPinnedStateChanged() {
+  pinIndicatorService.render();
   onFilterConstraintStateChanged();
 }
 
@@ -432,6 +435,27 @@ function pulseGoToElement(element) {
   const rect = element.getBoundingClientRect();
   if (!isRectValid(rect)) return;
 
+  // A <g>'s own bounding box spans every child, so on a marker that sits on a
+  // big group the ring landed nowhere near the thing being pointed at. Use the
+  // same focus point the viewport centres on, so ring and centre agree.
+  // A pinned element already carries a permanent ring; a second one on arrival
+  // would just stack on top of it.
+  if (pinIndicatorService.hasIndicatorFor(element)) return;
+
+  const focusPoint = getElementFocusPoint(element);
+  const centerX = focusPoint ? focusPoint.x : rect.left + rect.width / 2;
+  const centerY = focusPoint ? focusPoint.y : rect.top + rect.height / 2;
+
+  // Off-screen elements would draw a ring nobody can see.
+  if (
+    centerX < 0 ||
+    centerY < 0 ||
+    centerX > window.innerWidth ||
+    centerY > window.innerHeight
+  ) {
+    return;
+  }
+
   if (element._mobileGoToPulseEl && element._mobileGoToPulseEl.parentNode) {
     element._mobileGoToPulseEl.parentNode.removeChild(element._mobileGoToPulseEl);
     element._mobileGoToPulseEl = null;
@@ -447,8 +471,8 @@ function pulseGoToElement(element) {
   const size = Math.max(22, Math.min(60, Math.max(rect.width, rect.height) * 1.35));
   indicator.style.width = `${Math.round(size)}px`;
   indicator.style.height = `${Math.round(size)}px`;
-  indicator.style.left = `${Math.round(rect.left + rect.width / 2)}px`;
-  indicator.style.top = `${Math.round(rect.top + rect.height / 2)}px`;
+  indicator.style.left = `${Math.round(centerX)}px`;
+  indicator.style.top = `${Math.round(centerY)}px`;
   document.body.appendChild(indicator);
   element._mobileGoToPulseEl = indicator;
 
@@ -570,7 +594,10 @@ function getElementRect(element) {
   return null;
 }
 
-function getElementFocusPoint(element) {
+// A <g>'s own box spans every child, which on this diagram can be larger than
+// the screen. The smallest drawn thing inside it is what the reader means by
+// "this element", so both centring and the pin rings aim at that instead.
+function getElementFocusRect(element) {
   const viewportArea = window.innerWidth * window.innerHeight;
   const candidates = [element];
   const candidateSelector =
@@ -579,7 +606,7 @@ function getElementFocusPoint(element) {
     candidates.push(...Array.from(element.querySelectorAll(candidateSelector)));
   }
 
-  let bestPoint = null;
+  let bestRect = null;
   let bestScore = Number.POSITIVE_INFINITY;
   candidates.forEach((candidate) => {
     const rect = getElementRect(candidate);
@@ -590,13 +617,16 @@ function getElementFocusPoint(element) {
     const score = Math.sqrt(area);
     if (score >= bestScore) return;
     bestScore = score;
-    bestPoint = {
-      x: rect.left + rect.width / 2,
-      y: rect.top + rect.height / 2,
-    };
+    bestRect = rect;
   });
 
-  return bestPoint;
+  return bestRect;
+}
+
+function getElementFocusPoint(element) {
+  const rect = getElementFocusRect(element);
+  if (!rect) return null;
+  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
 }
 
 function centerHelpRecordInView(record, durationMs = 250, onComplete = null) {
@@ -707,7 +737,7 @@ function focusHelpRecord(record, options = {}) {
   }
 
   const preserveFitAll = Boolean(options.preserveFitAll);
-  const shouldKeepFitAllZoom = preserveFitAll && fitAllMode;
+  const shouldKeepFitAllZoom = (preserveFitAll && fitAllMode) || Boolean(options.keepZoom);
   if (!shouldKeepFitAllZoom) {
     const targetZoom = Math.min(maxZoom, Math.max(currentZoom, 2));
     currentZoom = targetZoom;
@@ -746,13 +776,57 @@ function goToHelpRecord(record, options = {}) {
       if (token !== goToNavigationToken) return;
       viewportService.syncDiagramSize();
       focusHelpRecord(record, options);
-      armViewportUrlSync();
+      if (options.armUrlSync !== false) {
+        armViewportUrlSync();
+      }
       pulseGoToElement(record.element);
       if (typeof options.onComplete === "function") {
         options.onComplete();
       }
     });
   });
+}
+
+// A link with a single pin and no v= carries no viewport, so the pinned
+// element can open off-screen. Centre on it, without changing the zoom and
+// without writing a v= the sender never chose. Two or more pins, or any v=,
+// mean the shared view wins and nothing happens here.
+function focusInitialPinIfRequested() {
+  const pinnedSlugs = (initialFilterState.pinnedSlugs || []).filter(Boolean);
+  if (pinnedSlugs.length !== 1) return;
+  if (urlParams.has(VIEWPORT_PARAM)) return;
+
+  const slug = pinnedSlugs[0];
+  const record = svgHelpRecords.find(
+    (candidate) => `${(candidate && candidate.slug) || ""}`.trim() === slug,
+  );
+  if (!record) return;
+
+  goToHelpRecord(record, {
+    closePanel: false,
+    keepZoom: true,
+    armUrlSync: false,
+  });
+}
+
+// Every overlay anchored to the diagram repositions from here, so a pan or
+// zoom cannot move one and leave another behind.
+function scheduleMarkerPositioning(immediate) {
+  userAnnotationPositioningService.scheduleMarkerPositioning(immediate);
+  if (immediate) {
+    pinIndicatorService.reposition();
+  } else {
+    pinIndicatorService.scheduleReposition();
+  }
+}
+
+function getPinnedElements() {
+  return svgHelpRecords
+    .filter(
+      (record) =>
+        record && record.element && pinnedHelpSlugs.has(`${record.slug || ""}`.trim()),
+    )
+    .map((record) => record.element);
 }
 
 function togglePinnedHelpSlug(slugValue) {
@@ -801,6 +875,9 @@ const userAnnotationPositioningService =
       config && config.userAnnotationTypes
         ? config.userAnnotationTypes[type]
         : null,
+    getImageFrameInWrapper: () => userAnnotationDragService.getImageFrameInWrapper(),
+    updateArrowLayout: (ann, frame) =>
+      userAnnotationArrowService.updateArrowLayout(ann, frame),
   });
 
 if (typeof window.createFilterLayoutService !== "function") {
@@ -838,6 +915,7 @@ const filterPanelStateService = window.createFilterPanelStateService({
   openFilterPanelBtn,
   filterSearchInput,
   clearFilterHighlight: () => filterHighlightService.clear(),
+  refreshTagTreeDefaultState: () => tagControlsService.refreshTagTreeDefaultState(),
   getPanelWidthPx: () => filterLayoutService.getPanelWidthPx(),
   updateLayout: (open) => filterLayoutService.updateLayout(open),
   getFilterPanelOpenState: () => filterPanelOpen,
@@ -911,6 +989,16 @@ function armViewportUrlSync() {
   scheduleViewportUrlSync();
 }
 
+if (typeof window.createPinIndicatorService !== "function") {
+  console.error("Missing pin indicator module: createPinIndicatorService");
+  throw new Error("Missing pin indicator module");
+}
+
+const pinIndicatorService = window.createPinIndicatorService({
+  getPinnedElements: () => getPinnedElements(),
+  getElementFocusRect: (element) => getElementFocusRect(element),
+});
+
 if (typeof window.createUrlStateService !== "function") {
   console.error("Missing URL state module: createUrlStateService");
   throw new Error("Missing URL state module");
@@ -918,6 +1006,7 @@ if (typeof window.createUrlStateService !== "function") {
 
 const urlStateService = window.createUrlStateService({
   compareTagsByFilterOrder: (a, b) => tagUtilsService.compareTagsByFilterOrder(a, b),
+  getTagParent: (tag) => tagUtilsService.getTagParent(tag),
   getTagVisibilityEntries: () => Array.from(tagVisibility.entries()),
   getFilterPanelOpen: () => filterPanelOpen,
   getAnnotationSearchQuery: () => annotationSearchQuery,
@@ -925,6 +1014,7 @@ const urlStateService = window.createUrlStateService({
   getFilterConstraints: () => (onlyShowPinned ? ["pinned"] : []),
   getSelectedLevel: () => selectedLevel,
   getDefaultSelectedLevel: () => maxDiagramLevel,
+  getTagTreeExpanded: () => tagControlsService.isTagTreeListExpanded(),
   getUserAnnotations: () => userAnnotations,
   getMaxUserAnnotations: () => (config && config.maxUserAnnotations) || 10,
   getViewportUrlValue: () => viewportUrlService.getUrlValue(),
@@ -935,6 +1025,7 @@ const urlStateService = window.createUrlStateService({
   pinsParam: FILTER_PINS_PARAM,
   constraintParam: FILTER_CONSTRAINT_PARAM,
   filterLevelParam: FILTER_LEVEL_PARAM,
+  tagsExpandedParam: TAGS_EXPANDED_PARAM,
 });
 
 if (typeof window.createTooltipService !== "function") {
@@ -985,7 +1076,7 @@ const viewportService = window.createViewportService({
   },
   getIsTouchActive: () => isTouchActive,
   scheduleMarkerPositioning: (immediate) =>
-    userAnnotationPositioningService.scheduleMarkerPositioning(immediate),
+    scheduleMarkerPositioning(immediate),
   onViewportSettled: () => scheduleViewportUrlSync(),
 });
 
@@ -1026,7 +1117,7 @@ const viewportInputService = window.createViewportInputService({
     viewportService.getImageBounds(forceRefresh),
   updateImageTransform: () => viewportService.updateImageTransform(),
   scheduleMarkerPositioning: (immediate) =>
-    userAnnotationPositioningService.scheduleMarkerPositioning(immediate),
+    scheduleMarkerPositioning(immediate),
   getCurrentZoom: () => currentZoom,
   setCurrentZoom: (value) => {
     currentZoom = value;
@@ -1139,6 +1230,9 @@ const filterResultsService = window.createFilterResultsService({
       "button, input, select, textarea",
     );
     tagControlInputs.forEach((element) => {
+      // The tag tree decides for itself which of its rows are usable - a row
+      // governed by a hidden parent stays disabled either way.
+      if (element.dataset.managedDisabled === "true") return;
       element.disabled = disable;
     });
   },
@@ -1227,6 +1321,10 @@ const appLifecycleService = window.createAppLifecycleService({
   showErrorOverlay: (message, isRetryable) =>
     loadFeedbackService.showError(message, isRetryable),
   loadDiagram: () => svgLoaderService.loadDiagram(diagramSourcePath),
+  onInitialViewReady: () => {
+    focusInitialPinIfRequested();
+    aboutModalService.showOnFirstVisit();
+  },
 });
 
 if (typeof window.createSvgHelpService !== "function") {
@@ -1279,6 +1377,7 @@ const svgLoaderService = window.createSvgLoaderService({
     svgHelpRecords = nextState.records;
     svgHelpRecordByElement = nextState.recordByElement;
     normalizePinnedHelpSlugs();
+    pinIndicatorService.render();
   },
   initializeTagControls: () => tagControlsService.initializeTagControls(),
   updateFilterPanelLayout: () => filterPanelStateService.updateFilterPanelLayout(),
@@ -1298,6 +1397,7 @@ onlyShowPinned = Array.isArray(initialFilterState.constraints)
   : false;
 selectedLevel = Math.max(0, Number.parseInt(initialFilterState.level, 10) || 0);
 filterSearchInput.value = annotationSearchQuery;
+const initialTagsExpanded = Boolean(initialFilterState.tagsExpanded);
 
 if (typeof window.createTagControlsService !== "function") {
   console.error("Missing tag controls module: createTagControlsService");
@@ -1307,6 +1407,10 @@ if (typeof window.createTagControlsService !== "function") {
 const tagControlsService = window.createTagControlsService({
   image,
   filterTagControls,
+  getInitialTagTreeExpanded: () => initialTagsExpanded,
+  escapeHTML: (value) => contentUtilsService.escapeHTML(value),
+  getTagDescription: (tag) => tagUtilsService.getTagDescription(tag, { inherit: true }),
+  getTooltipHideDelay: () => (config && config.ui && config.ui.tooltipHideDelay) || 100,
   parseTags: (tagValue) => tagUtilsService.parseTags(tagValue),
   getTagParent: (tag) => tagUtilsService.getTagParent(tag),
   getTagLeafName: (tag) => tagUtilsService.getTagLeafName(tag),
@@ -1376,6 +1480,7 @@ if (typeof window.createUserAnnotationListService !== "function") {
 
 const userAnnotationListService = window.createUserAnnotationListService({
   getUserAnnotations: () => userAnnotations,
+  createArrowSwatch: (style) => userAnnotationArrowService.createArrowSwatch(style),
   getUserAnnotationStyle: (type) =>
     config && config.userAnnotationTypes ? config.userAnnotationTypes[type] : null,
   escapeHTML: (value) => contentUtilsService.escapeHTML(value),
@@ -1420,7 +1525,25 @@ const userAnnotationDragService = window.createUserAnnotationDragService({
   getImageBounds: (forceRefresh = false) =>
     viewportService.getImageBounds(forceRefresh),
   scheduleMarkerPositioning: (immediate) =>
-    userAnnotationPositioningService.scheduleMarkerPositioning(immediate),
+    scheduleMarkerPositioning(immediate),
+  encodeUserAnnotationsToURL: () => urlStateService.encodeUserAnnotationsToURL(),
+});
+
+if (typeof window.createUserAnnotationArrowService !== "function") {
+  console.error(
+    "Missing user annotation arrow module: createUserAnnotationArrowService",
+  );
+  throw new Error("Missing user annotation arrow module");
+}
+
+const userAnnotationArrowService = window.createUserAnnotationArrowService({
+  wrapper,
+  tooltipService,
+  getEditModeEnabled: () => editModeEnabled,
+  getUserAnnotationStyle: (type) =>
+    config && config.userAnnotationTypes ? config.userAnnotationTypes[type] : null,
+  getImageFrameInWrapper: () => userAnnotationDragService.getImageFrameInWrapper(),
+  getTooltipHideDelay: () => (config && config.ui && config.ui.tooltipHideDelay) || 100,
   encodeUserAnnotationsToURL: () => urlStateService.encodeUserAnnotationsToURL(),
 });
 
@@ -1445,7 +1568,7 @@ const userAnnotationRenderService = window.createUserAnnotationRenderService({
   processUserDescription: (value) => contentUtilsService.processUserDescription(value),
   applyAnnotationFilter: () => filterResultsService.applyAnnotationFilter(),
   scheduleMarkerPositioning: (immediate) =>
-    userAnnotationPositioningService.scheduleMarkerPositioning(immediate),
+    scheduleMarkerPositioning(immediate),
   addPointAnnotationHoverEvents: (wrapperEl, tooltip, ann) =>
     userAnnotationHoverService.addPointAnnotationHoverEvents(wrapperEl, tooltip, ann),
   addUserAnnotationDragListeners: (wrapperEl, marker, index) =>
@@ -1460,6 +1583,8 @@ const userAnnotationRenderService = window.createUserAnnotationRenderService({
       areaElement,
       index,
     ),
+  renderArrowAnnotation: (ann, index, style, tooltip) =>
+    userAnnotationArrowService.renderArrowAnnotation(ann, index, style, tooltip),
 });
 
 if (typeof window.createUserAnnotationPlacementService !== "function") {
@@ -1509,6 +1634,7 @@ if (typeof window.createUserAnnotationInitService !== "function") {
 
 const userAnnotationInitService = window.createUserAnnotationInitService({
   getConfig: () => config,
+  createArrowSwatch: (style) => userAnnotationArrowService.createArrowSwatch(style),
   getCurrentMode: () => currentMode,
   setCurrentMode: (value) => {
     currentMode = value;
@@ -1553,6 +1679,7 @@ if (typeof window.createFilterPanelInputService !== "function") {
 
 const filterPanelInputService = window.createFilterPanelInputService({
   filterPanel,
+  getAnnotationSearchQuery: () => annotationSearchQuery,
   filterPanelBackdrop,
   openFilterPanelBtn,
   closeFilterPanelBtn,
@@ -1579,6 +1706,38 @@ const filterPanelInputService = window.createFilterPanelInputService({
   },
 });
 
+if (typeof window.createAboutModalService !== "function") {
+  console.error("Missing about modal module: createAboutModalService");
+  throw new Error("Missing about modal module");
+}
+
+const aboutModalService = window.createAboutModalService({
+  storageKey: ABOUT_STORAGE_KEY,
+});
+
+if (typeof window.createKeyboardShortcutsService !== "function") {
+  console.error("Missing keyboard shortcuts module: createKeyboardShortcutsService");
+  throw new Error("Missing keyboard shortcuts module");
+}
+
+const keyboardShortcutsService = window.createKeyboardShortcutsService({
+  filterSearchInput,
+  getFilterPanelOpen: () => filterPanelOpen,
+  setFilterPanelOpen: (open) => filterPanelStateService.setFilterPanelOpen(open),
+  zoomByKeyboardStep: (zoomIn) => viewportInputService.zoomByKeyboardStep(zoomIn),
+  panByViewportFraction: (fractionX, fractionY) =>
+    viewportInputService.panByViewportFraction(fractionX, fractionY),
+  setFitAllMode: (enabled) => setFitAllMode(enabled),
+  isAnyModalOpen: () => {
+    const modals = [
+      document.getElementById("user-annotations-modal"),
+      document.getElementById("edit-annotation-modal"),
+      document.getElementById("about-modal"),
+    ];
+    return modals.some((modal) => modal && modal.style.display !== "none");
+  },
+});
+
 // Initialize user annotations from URL
 userAnnotations = urlStateService.parseUserAnnotationsFromURL();
 
@@ -1594,6 +1753,8 @@ themeToggleBtn.addEventListener("click", () => {
 
 
 filterPanelInputService.initialize();
+aboutModalService.initialize();
+keyboardShortcutsService.initialize();
 
 // Show loading state immediately
 appLifecycleService.start();

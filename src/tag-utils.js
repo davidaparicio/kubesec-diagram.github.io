@@ -19,6 +19,23 @@ window.createTagUtilsService = function createTagUtilsService(deps) {
     return (deps.getConfig() && deps.getConfig().tagFilters) || { groups: [], tags: {} };
   }
 
+  // Both generated from METADATA.md at build time; see
+  // tag-descriptions.generated.js. A tag can be declared in the tree without
+  // carrying prose, so "declared" and "described" are separate questions.
+  function isDeclaredTag(tag) {
+    return Object.prototype.hasOwnProperty.call(window.tagDescriptions || {}, tag);
+  }
+
+  function getTagDescription(tag, { inherit = false } = {}) {
+    const descriptions = window.tagDescriptions || {};
+    const own = `${descriptions[tag] || ""}`.trim();
+    if (own || !inherit) return own;
+
+    // A child without its own line is still explained by its parent.
+    const parent = getTagParent(tag);
+    return parent ? getTagDescription(parent, { inherit }) : "";
+  }
+
   function getTagMeta(tag) {
     const tagConfig = getTagFilterConfig();
     const defaultMeta = {
@@ -30,6 +47,7 @@ window.createTagUtilsService = function createTagUtilsService(deps) {
     };
     return {
       ...defaultMeta,
+      description: getTagDescription(tag, { inherit: true }),
       ...((tagConfig.tags && tagConfig.tags[tag]) || {}),
       shortName: tag,
     };
@@ -227,6 +245,8 @@ window.createTagUtilsService = function createTagUtilsService(deps) {
     getTagParent,
     getTagLeafName,
     getTagFilterConfig,
+    isDeclaredTag,
+    getTagDescription,
     getTagMeta,
     getTagGroupMeta,
     compareTagsByFilterOrder,

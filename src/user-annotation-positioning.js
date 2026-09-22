@@ -39,6 +39,13 @@ window.createUserAnnotationPositioningService = function createUserAnnotationPos
       const style = deps.getUserAnnotationStyle(ann.type);
       if (!style) return;
 
+      // An arrow spans the diagram rather than sitting at one point, so it is
+      // laid out from the image frame instead of a single anchor.
+      if (style.annotationType === "arrow") {
+        deps.updateArrowLayout(ann, deps.getImageFrameInWrapper());
+        return;
+      }
+
       const wrapperEl = ann._el;
       const relativeX = ann.x * bounds.width * deps.getCurrentZoom();
       const relativeY = ann.y * bounds.height * deps.getCurrentZoom();

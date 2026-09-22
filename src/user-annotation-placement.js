@@ -1,10 +1,24 @@
 window.createUserAnnotationPlacementService =
   function createUserAnnotationPlacementService(deps) {
+    const SVG_NS = "http://www.w3.org/2000/svg";
+    // An arrow shorter than this is a mis-click, not a placement.
+    const MIN_ARROW_LENGTH_PX = 12;
+
     let isInPlacementMode = false;
     let currentPlacementData = null;
     let placementMouseMoveHandler = null;
     let placementClickHandler = null;
     let dragGhost = null;
+    let arrowPreview = null;
+    let arrowTailPoint = null;
+
+    function removeArrowPreview() {
+      if (arrowPreview && arrowPreview.parentNode) {
+        arrowPreview.parentNode.removeChild(arrowPreview);
+      }
+      arrowPreview = null;
+      arrowTailPoint = null;
+    }
 
     function cleanupPlacementMode() {
       if (!isInPlacementMode) return;
@@ -25,11 +39,57 @@ window.createUserAnnotationPlacementService =
         dragGhost.parentNode.removeChild(dragGhost);
       }
       dragGhost = null;
+      removeArrowPreview();
 
       wrapper.style.cursor = "";
 
       isInPlacementMode = false;
       currentPlacementData = null;
+    }
+
+    // The arrow is placed with two clicks - tail, then head - so the preview
+    // is a rubber band from the first click to the pointer.
+    function createArrowPreview(style) {
+      const wrapper = deps.getWrapper();
+      const svg = document.createElementNS(SVG_NS, "svg");
+      svg.setAttribute("class", "arrow-placement-preview");
+      svg.style.position = "absolute";
+      svg.style.inset = "0";
+      svg.style.width = "100%";
+      svg.style.height = "100%";
+      svg.style.pointerEvents = "none";
+      svg.style.zIndex = "1000";
+      svg.style.overflow = "visible";
+
+      const line = document.createElementNS(SVG_NS, "line");
+      line.setAttribute("stroke", style.border);
+      line.setAttribute("stroke-width", `${style.strokeWidth || 3}`);
+      line.setAttribute("stroke-linecap", "round");
+      line.setAttribute("stroke-dasharray", "8 6");
+      svg.appendChild(line);
+
+      wrapper.appendChild(svg);
+      arrowPreview = svg;
+      return line;
+    }
+
+    function getImageRelativePoint(clientX, clientY) {
+      const bounds = deps.getImageBounds(true);
+      const imageEl =
+        typeof deps.getImageElement === "function" ? deps.getImageElement() : null;
+      const imageRect =
+        imageEl && typeof imageEl.getBoundingClientRect === "function"
+          ? imageEl.getBoundingClientRect()
+          : null;
+      const rectLeft = imageRect ? imageRect.left : bounds.left;
+      const rectTop = imageRect ? imageRect.top : bounds.top;
+      const rectWidth = imageRect ? imageRect.width : bounds.width;
+      const rectHeight = imageRect ? imageRect.height : bounds.height;
+
+      return {
+        x: (clientX - rectLeft) / rectWidth,
+        y: (clientY - rectTop) / rectHeight,
+      };
     }
 
     function startAddAnnotationModeWithData(annotationData) {
@@ -47,6 +107,11 @@ window.createUserAnnotationPlacementService =
 
       const wrapper = deps.getWrapper();
       const isAreaAnnotation = style.annotationType === "area";
+
+      if (style.annotationType === "arrow") {
+        startArrowPlacement(style);
+        return;
+      }
 
       dragGhost = document.createElement("div");
       dragGhost.className = "user-annotation-ghost";
@@ -138,13 +203,7 @@ window.createUserAnnotationPlacementService =
         }
 
         if (x >= 0 && x <= 1 && y >= 0 && y <= 1) {
-          const userAnnotations = deps.getUserAnnotations();
-          const maxAnnotations = deps.getMaxUserAnnotations();
-          if (userAnnotations.length >= maxAnnotations) {
-            alert(`Maximum ${maxAnnotations} user annotations allowed.`);
-            cleanupPlacementMode();
-            return;
-          }
+          if (!hasRoomForAnotherAnnotation()) return;
 
           const annotation = {
             x,
@@ -160,55 +219,130 @@ window.createUserAnnotationPlacementService =
             annotation.heightRel = currentStyle.defaultSize.height / bounds.height;
           }
 
-          userAnnotations.push(annotation);
-          cleanupPlacementMode();
-          deps.clearInlineForm();
-          deps.encodeUserAnnotationsToURL();
-
-          requestAnimationFrame(() => {
-            deps.renderAllMarkers();
-            deps.updateUserAnnotationsList();
-
-            setTimeout(() => {
-              const newAnnotationIndex = userAnnotations.length - 1;
-              const newAnnotation = userAnnotations[newAnnotationIndex];
-              if (newAnnotation && newAnnotation._el) {
-                const newStyle = deps.getUserAnnotationStyle(newAnnotation.type);
-                if (newStyle) {
-                  if (newStyle.annotationType === "area") {
-                    const areaElement =
-                      newAnnotation._el.querySelector(".area-annotation");
-                    if (areaElement && newAnnotation._tooltip) {
-                      deps.addAreaAnnotationHoverEvents(
-                        areaElement,
-                        newAnnotation._tooltip,
-                        newAnnotation,
-                      );
-                    }
-                  } else if (newAnnotation._tooltip) {
-                    deps.addPointAnnotationHoverEvents(
-                      newAnnotation._el,
-                      newAnnotation._tooltip,
-                      newAnnotation,
-                    );
-                  }
-                }
-              }
-            }, 50);
-
-            setTimeout(() => {
-              deps.setEditModeEnabled(true);
-              const editModeCheckbox = document.getElementById("edit-mode-checkbox");
-              if (editModeCheckbox) {
-                editModeCheckbox.checked = true;
-              }
-              deps.updateUserAnnotationDragState();
-              deps.updateEditModeButtonVisibility();
-            }, 150);
-          });
+          commitAnnotation(annotation);
         } else {
           cleanupPlacementMode();
         }
+      };
+
+      wrapper.addEventListener("mousemove", placementMouseMoveHandler);
+      wrapper.addEventListener("click", placementClickHandler);
+    }
+
+    // Shared by every annotation type: store it, drop out of placement mode,
+    // then rebind hover on the freshly rendered element and enter edit mode so
+    // the new annotation can be adjusted straight away.
+    function commitAnnotation(annotation) {
+      const userAnnotations = deps.getUserAnnotations();
+      userAnnotations.push(annotation);
+      cleanupPlacementMode();
+      deps.clearInlineForm();
+      deps.encodeUserAnnotationsToURL();
+
+      requestAnimationFrame(() => {
+        deps.renderAllMarkers();
+        deps.updateUserAnnotationsList();
+
+        setTimeout(() => {
+          const newAnnotation = userAnnotations[userAnnotations.length - 1];
+          if (!newAnnotation || !newAnnotation._el) return;
+
+          const newStyle = deps.getUserAnnotationStyle(newAnnotation.type);
+          if (!newStyle) return;
+
+          // Arrows bind their own hover while rendering, since the target is
+          // the shaft rather than the wrapper.
+          if (newStyle.annotationType === "arrow") return;
+
+          if (newStyle.annotationType === "area") {
+            const areaElement = newAnnotation._el.querySelector(".area-annotation");
+            if (areaElement && newAnnotation._tooltip) {
+              deps.addAreaAnnotationHoverEvents(
+                areaElement,
+                newAnnotation._tooltip,
+                newAnnotation,
+              );
+            }
+          } else if (newAnnotation._tooltip) {
+            deps.addPointAnnotationHoverEvents(
+              newAnnotation._el,
+              newAnnotation._tooltip,
+              newAnnotation,
+            );
+          }
+        }, 50);
+
+        setTimeout(() => {
+          deps.setEditModeEnabled(true);
+          const editModeCheckbox = document.getElementById("edit-mode-checkbox");
+          if (editModeCheckbox) {
+            editModeCheckbox.checked = true;
+          }
+          deps.updateUserAnnotationDragState();
+          deps.updateEditModeButtonVisibility();
+        }, 150);
+      });
+    }
+
+    function hasRoomForAnotherAnnotation() {
+      const maxAnnotations = deps.getMaxUserAnnotations();
+      if (deps.getUserAnnotations().length < maxAnnotations) return true;
+
+      alert(`Maximum ${maxAnnotations} user annotations allowed.`);
+      cleanupPlacementMode();
+      return false;
+    }
+
+    function startArrowPlacement(style) {
+      const wrapper = deps.getWrapper();
+      const previewLine = createArrowPreview(style);
+      wrapper.style.cursor = "crosshair";
+
+      placementMouseMoveHandler = (e) => {
+        if (!arrowTailPoint || !arrowPreview) return;
+
+        const wrapperRect = wrapper.getBoundingClientRect();
+        previewLine.setAttribute("x2", `${e.clientX - wrapperRect.left}`);
+        previewLine.setAttribute("y2", `${e.clientY - wrapperRect.top}`);
+      };
+
+      placementClickHandler = (e) => {
+        if (!isInPlacementMode || !currentPlacementData) return;
+
+        const point = getImageRelativePoint(e.clientX, e.clientY);
+        if (point.x < 0 || point.x > 1 || point.y < 0 || point.y > 1) {
+          cleanupPlacementMode();
+          return;
+        }
+
+        const wrapperRect = wrapper.getBoundingClientRect();
+        const localX = e.clientX - wrapperRect.left;
+        const localY = e.clientY - wrapperRect.top;
+
+        if (!arrowTailPoint) {
+          arrowTailPoint = point;
+          previewLine.setAttribute("x1", `${localX}`);
+          previewLine.setAttribute("y1", `${localY}`);
+          previewLine.setAttribute("x2", `${localX}`);
+          previewLine.setAttribute("y2", `${localY}`);
+          return;
+        }
+
+        const dx = localX - Number.parseFloat(previewLine.getAttribute("x1"));
+        const dy = localY - Number.parseFloat(previewLine.getAttribute("y1"));
+        if (Math.hypot(dx, dy) < MIN_ARROW_LENGTH_PX) return;
+
+        if (!hasRoomForAnotherAnnotation()) return;
+
+        commitAnnotation({
+          x: arrowTailPoint.x,
+          y: arrowTailPoint.y,
+          x2: point.x,
+          y2: point.y,
+          title: currentPlacementData.title,
+          description: currentPlacementData.description,
+          type: currentPlacementData.type,
+        });
       };
 
       wrapper.addEventListener("mousemove", placementMouseMoveHandler);

@@ -12,6 +12,9 @@ window.createFilterResultsService = function createFilterResultsService(deps) {
   };
   const TOUCH_TAP_MOVE_THRESHOLD_PX = 14;
   const TOUCH_CLICK_SUPPRESS_MS = 700;
+  // The entry last activated from the keyboard, marked aria-current. Tracked by
+  // slug so it survives a re-render of the list.
+  let keyboardCursorSlug = "";
 
   function getRecordSlug(record) {
     return `${record && record.slug ? record.slug : ""}`.trim();
@@ -105,7 +108,7 @@ window.createFilterResultsService = function createFilterResultsService(deps) {
     touchTapState.moved = false;
   }
 
-  function activateResultItem(item) {
+  function activateResultItem(item, options = {}) {
     if (!item || isInactiveResultItem(item)) return;
     if (!shouldUseGoToNavigation()) return;
     if (typeof deps.goToHelpRecord !== "function") return;
@@ -113,12 +116,15 @@ window.createFilterResultsService = function createFilterResultsService(deps) {
     const record = item._filterRecord;
     if (!record) return;
 
+    const fromKeyboard = Boolean(options.fromKeyboard);
+
     if (typeof deps.clearFilterHighlight === "function") {
       deps.clearFilterHighlight();
     }
 
     const activeEl = document.activeElement;
     if (
+      !fromKeyboard &&
       activeEl &&
       activeEl !== document.body &&
       typeof activeEl.blur === "function" &&
@@ -133,7 +139,9 @@ window.createFilterResultsService = function createFilterResultsService(deps) {
     const preserveFitAll =
       typeof deps.getFitAllMode === "function" ? Boolean(deps.getFitAllMode()) : false;
     deps.goToHelpRecord(record, {
-      closePanel: isMobile,
+      // Activating with the keyboard keeps the panel open, so focus stays
+      // somewhere the reader can carry on from.
+      closePanel: isMobile && !fromKeyboard,
       preserveFitAll,
       onComplete: () => {
         if (typeof deps.highlightResultTemporarily === "function") {
@@ -143,9 +151,31 @@ window.createFilterResultsService = function createFilterResultsService(deps) {
     });
   }
 
+  function markKeyboardCursor(item) {
+    deps.filterResults
+      .querySelectorAll('.filter-result-item[aria-current="true"]')
+      .forEach((el) => el.removeAttribute("aria-current"));
+    if (item) item.setAttribute("aria-current", "true");
+  }
+
   function bindInteractionHandlers() {
     if (interactionHandlersBound) return;
     interactionHandlersBound = true;
+
+    deps.filterResults.setAttribute("role", "list");
+    deps.filterResults.setAttribute("aria-label", "Diagram explanations");
+
+    deps.filterResults.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " " && event.key !== "Spacebar") return;
+      const item = getResultItemFromTarget(event.target);
+      if (!item || isInactiveResultItem(item)) return;
+      if (shouldIgnoreActivationTarget(event.target)) return;
+
+      event.preventDefault();
+      keyboardCursorSlug = getRecordSlug(item._filterRecord);
+      markKeyboardCursor(item);
+      activateResultItem(item, { fromKeyboard: true });
+    });
 
     deps.filterResults.addEventListener("pointerdown", (event) => {
       if (event.pointerType !== "touch") return;
@@ -221,6 +251,27 @@ window.createFilterResultsService = function createFilterResultsService(deps) {
     });
   }
 
+  // The visible card is a title, rendered HTML, tag badges and a pin button.
+  // A screen reader needs that condensed into one sentence per entry.
+  function buildResultAriaLabel(record, options = {}) {
+    const parts = [record.title || "Help"];
+    const tags = deps.getSortedVisibleTags(record.tags || []);
+    if (tags.length > 0) {
+      parts.push(`tags ${tags.join(", ")}`);
+    }
+    const level = deps.getTagLevel(record.tags || []);
+    if (level > 0) {
+      parts.push(`level ${level}`);
+    }
+    if (isRecordPinned(record)) {
+      parts.push("pinned");
+    }
+    if (options.inactive) {
+      parts.push(options.hiddenReason || "currently hidden");
+    }
+    return parts.join(" · ");
+  }
+
   function createResultItem(record, options = {}) {
     const inactive = Boolean(options.inactive);
     const hiddenReason = inactive ? formatHiddenReason(options) : "";
@@ -228,7 +279,10 @@ window.createFilterResultsService = function createFilterResultsService(deps) {
     item.className = "filter-result-item";
     item._filterRecord = record;
     const enableHoverHighlight = hasHoverCapability();
-    item.tabIndex = inactive ? -1 : enableHoverHighlight ? 0 : -1;
+    // Every active entry is reachable by keyboard regardless of pointer type -
+    // this list is the accessible surface for the diagram.
+    item.tabIndex = inactive ? -1 : 0;
+    item.setAttribute("role", inactive ? "note" : "button");
     item.setAttribute("aria-disabled", inactive ? "true" : "false");
     if (inactive) {
       item.classList.add("is-inactive");
@@ -260,6 +314,10 @@ window.createFilterResultsService = function createFilterResultsService(deps) {
         ? `<div class="filter-result-actions">${hiddenStateHtml}${actionsRowHtml}</div>`
         : "";
     item.innerHTML = `<div class="filter-result-head"><strong>${deps.escapeHTML(record.title || "Help")}</strong></div><div class="filter-result-content">${record.bodyHtml || "Help annotation"}</div>${actionsHtml}`;
+    item.setAttribute("aria-label", buildResultAriaLabel(record, { inactive, hiddenReason }));
+    if (getRecordSlug(record) === keyboardCursorSlug) {
+      item.setAttribute("aria-current", "true");
+    }
     if (!inactive && enableHoverHighlight) {
       deps.bindResultHighlight(item, record);
     }

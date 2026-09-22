@@ -6,7 +6,8 @@ window.createUserAnnotationFormsService = function createUserAnnotationFormsServ
     const type = deps.getSelectedType();
     const placeBtn = document.getElementById("place-annotation-btn");
 
-    let isValid = title && type && deps.getCurrentMode();
+    // Title is optional - an arrow pointing at something often needs no words.
+    let isValid = Boolean(type) && Boolean(deps.getCurrentMode());
 
     const rectangleBtn = document.getElementById("shape-rectangle");
     const circleBtn = document.getElementById("shape-circle");
@@ -78,7 +79,7 @@ window.createUserAnnotationFormsService = function createUserAnnotationFormsServ
       const type = document.getElementById("edit-type").value;
       const editIndex = Number.parseInt(form.dataset.editIndex, 10);
 
-      if (!title || !type || Number.isNaN(editIndex)) return;
+      if (!type || Number.isNaN(editIndex)) return;
 
       const userAnnotations = deps.getUserAnnotations();
       userAnnotations[editIndex] = {

@@ -1,8 +1,40 @@
 window.createTagControlsService = function createTagControlsService(deps) {
   const TAG_TREE_LAYOUT = "tree";
+  // Height budget for the default expansion. A row is one tag line; the
+  // reserve is the space the result list must keep below the tree.
+  const TAG_TREE_ROW_HEIGHT_PX = 30;
+  const TAG_TREE_RESULTS_RESERVE_RATIO = 0.4;
+  const TAG_TREE_RESULTS_RESERVE_MAX_PX = 200;
+  const TAG_TREE_RESIZE_DEBOUNCE_MS = 150;
+  const TAG_TOOLTIP_MIN_WIDTH_PX = 1000;
+  const TAG_TOOLTIP_GAP_PX = 10;
+
   const expandedTagPaths = new Set();
   let tagTreeFilterQuery = "";
-  let tagTreeListExpanded = false;
+  // Collapsed unless a link says otherwise. Read lazily: the service is
+  // constructed before the deps object is fully populated at startup.
+  let tagTreeListExpanded = null;
+
+  function setTagTreeListExpanded(expanded) {
+    tagTreeListExpanded = Boolean(expanded);
+  }
+
+  function isTagTreeListExpanded() {
+    if (tagTreeListExpanded === null) {
+      tagTreeListExpanded =
+        typeof deps.getInitialTagTreeExpanded === "function"
+          ? Boolean(deps.getInitialTagTreeExpanded())
+          : false;
+    }
+    return tagTreeListExpanded;
+  }
+  // Once the reader expands or collapses a node themselves, the height rule
+  // stops overruling them for the rest of the session.
+  let tagTreeManualOverride = false;
+  let applyTagTreeHeightDefault = null;
+  let currentTagTreeRefresh = null;
+  let resizeListenerBound = false;
+  let resizeTimeout = null;
 
   function getLevelLabel(level, maxLevel) {
     const normalizedLevel = Math.max(0, Number.parseInt(level, 10) || 0);
@@ -52,6 +84,10 @@ window.createTagControlsService = function createTagControlsService(deps) {
     if (!deps.filterTagControls) return;
 
     deps.filterTagControls.innerHTML = "";
+    // The rows are gone, so their lazily created tooltips are orphans.
+    document
+      .querySelectorAll(".tag-description-tooltip")
+      .forEach((el) => el.remove());
     const nextDiagramTagElements = new Map();
     deps.setDiagramTagElements(nextDiagramTagElements);
 
@@ -219,24 +255,77 @@ window.createTagControlsService = function createTagControlsService(deps) {
     deps.getTagVisibility().set(tag, initiallyVisible);
   }
 
-  function createTagToggle(tag, label, onToggled) {
+  function setTagHidden(tag, hidden) {
+    deps.getTagVisibility().set(tag, !hidden);
+    applyTagVisibility(tag);
+  }
+
+  function commitTagChange(onToggled) {
+    // The filter pass re-runs the panel's disabled bookkeeping, so the tree
+    // refresh has to come after it or the governed rows are re-enabled.
+    deps.applyAnnotationFilter();
+    if (onToggled) onToggled();
+    deps.updateURLState();
+  }
+
+  // Ancestors are materialised on every cell (METADATA.md R3), so an element
+  // tagged Access.Cli also carries Access. Hiding a parent therefore hides its
+  // whole branch on its own - no need to write the children down anywhere.
+  // Showing one is the asymmetric case: a child hidden in its own right stays
+  // hidden until it is cleared too.
+  function hideTagBranch(tag) {
+    setTagHidden(tag, true);
+  }
+
+  function showTagBranch(tag, descendantTags) {
+    setTagHidden(tag, false);
+    descendantTags.forEach((descendant) => setTagHidden(descendant, false));
+  }
+
+  // What the row shows: hidden in its own right, or hidden because something
+  // above it is. The second kind is not the reader's to change from here.
+  function isTagEffectivelyHidden(tag) {
+    return isTagHidden(tag) || Boolean(getHiddenAncestor(tag));
+  }
+
+  function createTagToggle(tag, label, onToggled, descendantTags = []) {
     const toggle = document.createElement("button");
     toggle.type = "button";
     toggle.className = "tag-filter-btn";
-    toggle.title = `Toggle tag: ${tag}`;
+    toggle.dataset.managedDisabled = "true";
     toggle.textContent = label;
     applyTagButtonStyle(tag, toggle);
     updateTagToggleVisual(tag, toggle);
     toggle.addEventListener("click", () => {
-      const currentlyVisible = deps.getTagVisibility().get(tag) !== false;
-      deps.getTagVisibility().set(tag, !currentlyVisible);
+      // A governed child is not clickable; the parent decides for it.
+      if (getHiddenAncestor(tag)) return;
+
+      if (isTagHidden(tag)) {
+        showTagBranch(tag, descendantTags);
+      } else {
+        hideTagBranch(tag);
+      }
       updateTagToggleVisual(tag, toggle);
-      applyTagVisibility(tag);
-      if (onToggled) onToggled();
-      deps.applyAnnotationFilter();
-      deps.updateURLState();
+      commitTagChange(onToggled);
     });
     return toggle;
+  }
+
+  // The exception to the branch rule: show this tag back without also
+  // un-hiding children that were hidden on their own.
+  function createSelfOnlyToggle(tag, onToggled) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "tag-tree-self-toggle";
+    button.dataset.managedDisabled = "true";
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (button.disabled || getHiddenAncestor(tag)) return;
+
+      setTagHidden(tag, !isTagHidden(tag));
+      commitTagChange(onToggled);
+    });
+    return button;
   }
 
   function renderFlatTagGroup(groupWrap, tags) {
@@ -294,9 +383,26 @@ window.createTagControlsService = function createTagControlsService(deps) {
     return elements ? elements.length : 0;
   }
 
-  function showTags(tags) {
+  function setTagsVisibility(tags, visible) {
     tags.forEach((tag) => {
-      deps.getTagVisibility().set(tag, true);
+      deps.getTagVisibility().set(tag, visible);
+      applyTagVisibility(tag);
+    });
+    deps.applyAnnotationFilter();
+    deps.updateURLState();
+  }
+
+  function showTags(tags) {
+    setTagsVisibility(tags, true);
+  }
+
+  function hideTags(tags) {
+    setTagsVisibility(tags, false);
+  }
+
+  function invertTags(tags) {
+    tags.forEach((tag) => {
+      deps.getTagVisibility().set(tag, isTagHidden(tag));
       applyTagVisibility(tag);
     });
     deps.applyAnnotationFilter();
@@ -310,7 +416,7 @@ window.createTagControlsService = function createTagControlsService(deps) {
     ]);
   }
 
-  function createTagTreeHeader(groupTitle, onToggle, onReset) {
+  function createTagTreeHeader(groupTitle, handlers) {
     const headerRow = document.createElement("div");
     headerRow.className = "tag-tree-header-row";
 
@@ -324,19 +430,139 @@ window.createTagControlsService = function createTagControlsService(deps) {
     header.appendChild(caret);
     header.appendChild(groupTitle.cloneNode(true));
     header.appendChild(meta);
-    header.addEventListener("click", onToggle);
+    header.addEventListener("click", handlers.onToggle);
 
     const reset = document.createElement("button");
     reset.type = "button";
     reset.className = "tag-tree-link";
     reset.textContent = "Reset";
     reset.title = "Show all tags";
-    reset.addEventListener("click", onReset);
+    reset.addEventListener("click", handlers.onReset);
+
+    // Bulk controls act on every tag in the group, expanded or not.
+    const bulk = document.createElement("div");
+    bulk.className = "tag-tree-bulk";
+    const bulkButtons = [
+      { label: "Show all", title: "Show all tags", handler: handlers.onShowAll },
+      { label: "Hide all", title: "Hide all tags", handler: handlers.onHideAll },
+      { label: "Invert", title: "Invert which tags are hidden", handler: handlers.onInvert },
+    ].map(({ label, title, handler }) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "tag-tree-bulk-btn";
+      button.dataset.managedDisabled = "true";
+      button.textContent = label;
+      button.title = title;
+      button.addEventListener("click", handler);
+      bulk.appendChild(button);
+      return button;
+    });
 
     headerRow.appendChild(header);
     headerRow.appendChild(reset);
     groupTitle.replaceWith(headerRow);
-    return { header, meta, reset };
+    headerRow.after(bulk);
+    return { header, meta, reset, bulk, showAllBtn: bulkButtons[0], hideAllBtn: bulkButtons[1] };
+  }
+
+  // How many tag rows fit above the result list. The tree is worth expanding
+  // only while the results it filters stay in view.
+  function countTagTreeRowsThatFit(panel) {
+    const body = panel.closest(".filter-panel-body");
+    if (!body) return 0;
+
+    const bodyRect = body.getBoundingClientRect();
+    if (!(bodyRect.height > 0)) return 0;
+
+    const reserve = Math.min(
+      TAG_TREE_RESULTS_RESERVE_MAX_PX,
+      bodyRect.height * TAG_TREE_RESULTS_RESERVE_RATIO,
+    );
+    const panelTop = panel.getBoundingClientRect().top - bodyRect.top;
+    const available = bodyRect.height - panelTop - reserve;
+    return Math.max(0, Math.floor(available / TAG_TREE_ROW_HEIGHT_PX));
+  }
+
+  // Tag descriptions come from METADATA.md via the build step, so the tree row
+  // can explain a tag without the taxonomy being duplicated into the diagram.
+  function buildTagTooltipHtml(node) {
+    const description = deps.getTagDescription(node.path);
+    const count = node.isTag ? getTagElementCount(node.path) : 0;
+    const countText = `${count} ${count === 1 ? "element" : "elements"}`;
+    const descriptionHtml = description
+      ? `<br>${deps.escapeHTML(description)}`
+      : "";
+    return `<b>${deps.escapeHTML(node.path)}</b>${descriptionHtml}<br><small>${countText}</small>`;
+  }
+
+  // Wide screens only: on a phone the panel is the whole screen, so there is no
+  // "beside the menu" to put this in, and a long-press box would cover the tags
+  // it is meant to describe.
+  function canShowTagTooltip() {
+    return (
+      window.innerWidth > TAG_TOOLTIP_MIN_WIDTH_PX &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(hover: hover) and (pointer: fine)").matches
+    );
+  }
+
+  // The box lives on <body>, not in #tooltip-layer: that layer sits inside the
+  // diagram's stacking context, so its z-index could never beat the panel and
+  // the description came out underneath the menu.
+  function positionTagTooltip(tooltip, row) {
+    const rowRect = row.getBoundingClientRect();
+    const panelRect = deps.filterTagControls
+      .closest(".filter-panel")
+      .getBoundingClientRect();
+    const tooltipRect = tooltip.getBoundingClientRect();
+
+    // Clear of the panel's edge, so it never covers another tag row.
+    let left = panelRect.left - tooltipRect.width - TAG_TOOLTIP_GAP_PX;
+    if (left < TAG_TOOLTIP_GAP_PX) {
+      left = TAG_TOOLTIP_GAP_PX;
+    }
+
+    const top = Math.max(
+      TAG_TOOLTIP_GAP_PX,
+      Math.min(
+        rowRect.top + rowRect.height / 2 - tooltipRect.height / 2,
+        window.innerHeight - tooltipRect.height - TAG_TOOLTIP_GAP_PX,
+      ),
+    );
+
+    tooltip.style.left = `${Math.round(left)}px`;
+    tooltip.style.top = `${Math.round(top)}px`;
+  }
+
+  function bindTagDescriptionTooltip(row, node) {
+    let tooltip = null;
+    let hideTimeout = null;
+
+    const ensureTooltip = () => {
+      if (tooltip) return tooltip;
+      tooltip = document.createElement("div");
+      tooltip.className = "tooltip-box tag-description-tooltip";
+      tooltip.innerHTML = buildTagTooltipHtml(node);
+      tooltip.style.display = "none";
+      document.body.appendChild(tooltip);
+      return tooltip;
+    };
+
+    row.addEventListener("mouseenter", () => {
+      if (!canShowTagTooltip()) return;
+      clearTimeout(hideTimeout);
+      const el = ensureTooltip();
+      el.style.display = "block";
+      positionTagTooltip(el, row);
+    });
+
+    row.addEventListener("mouseleave", () => {
+      if (!tooltip) return;
+      clearTimeout(hideTimeout);
+      hideTimeout = setTimeout(() => {
+        tooltip.style.display = "none";
+      }, deps.getTooltipHideDelay());
+    });
   }
 
   function renderTagTreeGroup(groupWrap, groupTitle, tags) {
@@ -366,21 +592,35 @@ window.createTagControlsService = function createTagControlsService(deps) {
     const views = new Map();
     const roots = buildTagTree(tags);
     const refresh = () => refreshTagTree(tree, roots, views, emptyMessage, listView);
+    currentTagTreeRefresh = refresh;
     const listView = {
       panel,
       tags,
-      ...createTagTreeHeader(
-        groupTitle,
-        () => {
+      ...createTagTreeHeader(groupTitle, {
+        onToggle: () => {
           if (tagTreeFilterQuery.trim()) return;
-          tagTreeListExpanded = !tagTreeListExpanded;
+          setTagTreeListExpanded(!isTagTreeListExpanded());
+          refreshTagTreeDefaultState();
           refresh();
+          deps.updateURLState();
         },
-        () => {
+        onReset: () => {
           showTags(tags);
           refresh();
         },
-      ),
+        onShowAll: () => {
+          showTags(tags);
+          refresh();
+        },
+        onHideAll: () => {
+          hideTags(tags);
+          refresh();
+        },
+        onInvert: () => {
+          invertTags(tags);
+          refresh();
+        },
+      }),
     };
     const toggleExpanded = (path) => {
       if (tagTreeFilterQuery.trim()) return;
@@ -389,7 +629,27 @@ window.createTagControlsService = function createTagControlsService(deps) {
       } else {
         expandedTagPaths.add(path);
       }
+      tagTreeManualOverride = true;
       refresh();
+    };
+
+    // The group itself starts closed and its open state comes from the URL.
+    // This only decides how much of the tree is pre-expanded once it is open,
+    // so opening it never pushes the results off screen.
+    applyTagTreeHeightDefault = () => {
+      if (tagTreeManualOverride || !isTagTreeListExpanded()) return;
+
+      const rowsThatFit = countTagTreeRowsThatFit(panel);
+      expandedTagPaths.clear();
+      if (rowsThatFit < roots.length) return;
+
+      let rows = roots.length;
+      roots.forEach((root) => {
+        const childRows = root.children.length;
+        if (childRows === 0 || rows + childRows > rowsThatFit) return;
+        expandedTagPaths.add(root.path);
+        rows += childRows;
+      });
     };
 
     const createNode = (node, depth) => {
@@ -418,11 +678,22 @@ window.createTagControlsService = function createTagControlsService(deps) {
       row.appendChild(caret);
 
       let toggle = null;
+      let selfToggle = null;
       if (node.isTag) {
-        toggle = createTagToggle(node.path, getTreeNodeLabel(node), refresh);
+        const descendantTags = getDescendantTags(node);
+        toggle = createTagToggle(
+          node.path,
+          getTreeNodeLabel(node),
+          refresh,
+          descendantTags,
+        );
         toggle.classList.add("tag-tree-toggle");
         toggle.addEventListener("click", (event) => event.stopPropagation());
         row.appendChild(toggle);
+        if (descendantTags.length > 0) {
+          selfToggle = createSelfOnlyToggle(node.path, refresh);
+          row.appendChild(selfToggle);
+        }
       } else {
         const label = document.createElement("span");
         label.className = "tag-tree-label";
@@ -432,15 +703,10 @@ window.createTagControlsService = function createTagControlsService(deps) {
 
       const meta = document.createElement("span");
       meta.className = "tag-tree-meta";
-      const metaHidden = document.createElement("button");
-      metaHidden.type = "button";
-      metaHidden.className = "tag-tree-link tag-tree-meta-hidden";
-      metaHidden.title = `Show all tags under ${node.path}`;
-      metaHidden.addEventListener("click", (event) => {
-        event.stopPropagation();
-        showTags(getDescendantTags(node));
-        refresh();
-      });
+      // Was a "show all under X" button. Clicking a hidden parent now does
+      // exactly that, so this is only a count, and parents keep one control.
+      const metaHidden = document.createElement("span");
+      metaHidden.className = "tag-tree-meta-hidden";
       const metaCount = document.createElement("span");
       const elementCount = node.isTag ? getTagElementCount(node.path) : 0;
       metaCount.textContent = `${elementCount} ${elementCount === 1 ? "element" : "elements"}`;
@@ -455,6 +721,7 @@ window.createTagControlsService = function createTagControlsService(deps) {
           toggle.click();
         }
       });
+      bindTagDescriptionTooltip(row, node);
       element.appendChild(row);
 
       let childrenWrap = null;
@@ -468,7 +735,7 @@ window.createTagControlsService = function createTagControlsService(deps) {
         element.appendChild(childrenWrap);
       }
 
-      views.set(node.path, { element, row, caret, toggle, metaHidden, childrenWrap });
+      views.set(node.path, { element, row, caret, toggle, selfToggle, metaHidden, childrenWrap });
       return element;
     };
     roots.forEach((root) => tree.appendChild(createNode(root, 0)));
@@ -487,7 +754,36 @@ window.createTagControlsService = function createTagControlsService(deps) {
 
     groupWrap.appendChild(filterInput);
     groupWrap.appendChild(panel);
+
+    bindTagTreeResizeListener();
     refresh();
+  }
+
+  // Re-runs the height rule against the panel as it is now. A no-op once the
+  // reader has expanded or collapsed anything themselves.
+  function refreshTagTreeDefaultState() {
+    if (tagTreeManualOverride) return;
+    if (typeof applyTagTreeHeightDefault !== "function") return;
+
+    requestAnimationFrame(() => {
+      applyTagTreeHeightDefault();
+      if (typeof currentTagTreeRefresh === "function") currentTagTreeRefresh();
+    });
+  }
+
+  function bindTagTreeResizeListener() {
+    if (resizeListenerBound) return;
+    resizeListenerBound = true;
+
+    window.addEventListener("resize", () => {
+      if (tagTreeManualOverride || typeof applyTagTreeHeightDefault !== "function") return;
+      if (resizeTimeout) clearTimeout(resizeTimeout);
+      resizeTimeout = setTimeout(() => {
+        resizeTimeout = null;
+        applyTagTreeHeightDefault();
+        if (typeof currentTagTreeRefresh === "function") currentTagTreeRefresh();
+      }, TAG_TREE_RESIZE_DEBOUNCE_MS);
+    });
   }
 
   function refreshTagTree(tree, roots, views, emptyMessage, listView) {
@@ -530,19 +826,41 @@ window.createTagControlsService = function createTagControlsService(deps) {
       }
 
       const hiddenBelow = view.childrenWrap && !expanded ? countHiddenDescendants(node) : 0;
-      view.metaHidden.textContent = hiddenBelow > 0 ? `${hiddenBelow} hidden \u00B7 show` : "";
+      view.metaHidden.textContent = hiddenBelow > 0 ? `${hiddenBelow} hidden` : "";
 
       if (view.toggle) {
-        updateTagToggleVisual(node.path, view.toggle);
         const hiddenAncestor = getHiddenAncestor(node.path);
-        view.toggle.classList.toggle("ancestor-hidden", Boolean(hiddenAncestor));
+        const governed = Boolean(hiddenAncestor) || panelDisabled;
+        // Governed rows show the state they are actually in - hidden - but
+        // cannot be clicked, so a click can no longer rewrite the URL under a
+        // control that looks disabled.
+        view.toggle.classList.toggle("active", !isTagEffectivelyHidden(node.path));
+        view.toggle.classList.toggle("ancestor-hidden", governed);
+        view.toggle.disabled = governed;
         view.toggle.title = hiddenAncestor
-          ? `Toggle tag: ${node.path} (hidden by parent ${hiddenAncestor})`
-          : `Toggle tag: ${node.path}`;
+          ? `Hidden by ${hiddenAncestor}. Show ${hiddenAncestor} to change this.`
+          : isTagHidden(node.path)
+            ? `Show ${node.path} and everything under it`
+            : `Hide ${node.path} and everything under it`;
+
+        if (view.selfToggle) {
+          view.selfToggle.disabled = governed;
+          view.selfToggle.classList.toggle("is-hidden-tag", isTagHidden(node.path));
+          view.selfToggle.title = hiddenAncestor
+            ? `Hidden by ${hiddenAncestor}. Show ${hiddenAncestor} to change this.`
+            : isTagHidden(node.path)
+              ? `Show ${node.path} only, leaving hidden children hidden`
+              : `Hide ${node.path} only`;
+          view.selfToggle.setAttribute("aria-label", view.selfToggle.title);
+        }
       }
     };
 
-    const listOpen = query.length > 0 || tagTreeListExpanded;
+    // While only-pinned mode is on the whole panel is disabled from outside.
+    const panelDisabled = Boolean(
+      deps.filterTagControls.closest(".filter-only-pinned-mode"),
+    );
+    const listOpen = query.length > 0 || isTagTreeListExpanded();
     tree.classList.toggle("is-filtering", query.length > 0);
     listView.header.classList.toggle("is-filtering", query.length > 0);
     listView.header.classList.toggle("is-expanded", listOpen);
@@ -551,6 +869,9 @@ window.createTagControlsService = function createTagControlsService(deps) {
     const hiddenTotal = listView.tags.filter(isTagHidden).length;
     listView.meta.textContent = `${listView.tags.length} tags${hiddenTotal > 0 ? ` \u00B7 ${hiddenTotal} hidden` : ""}`;
     listView.reset.hidden = hiddenTotal === 0;
+    listView.bulk.hidden = !listOpen;
+    listView.showAllBtn.disabled = panelDisabled || hiddenTotal === 0;
+    listView.hideAllBtn.disabled = panelDisabled || hiddenTotal === listView.tags.length;
 
     roots.forEach((root) => walk(root, listOpen));
     emptyMessage.hidden = !query || roots.some(subtreeMatches);
@@ -562,6 +883,9 @@ window.createTagControlsService = function createTagControlsService(deps) {
 
   return {
     clearTagTreeFilter,
+    refreshTagTreeDefaultState,
+    setTagTreeListExpanded,
+    isTagTreeListExpanded,
     applyTagVisibility,
     updateTagToggleVisual,
     applyTagButtonStyle,

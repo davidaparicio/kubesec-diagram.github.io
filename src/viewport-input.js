@@ -161,6 +161,12 @@ window.createViewportInputService = function createViewportInputService(deps) {
     }
   }
 
+  // A modal that covers the diagram must also stop it moving underneath, or
+  // the view has drifted by the time the reader closes it.
+  function isDiagramLockedByModal() {
+    return document.body.classList.contains("modal-locks-diagram");
+  }
+
   function isViewportLockedByMobileTooltip() {
     if (document.body.classList.contains("mobile-tooltip-open")) {
       return true;
@@ -174,10 +180,111 @@ window.createViewportInputService = function createViewportInputService(deps) {
     );
   }
 
-  function handleWheel(e) {
+  // Shared by the wheel and by keyboard zoom, so both anchor the same way and
+  // move by the same ratio. clientX/clientY name the point that must stay put.
+  function zoomAtPoint(zoomFactor, zoomIn, clientX, clientY) {
     const wasFitAll =
       typeof deps.getFitAllMode === "function" && deps.getFitAllMode();
     const oldZoom = deps.getCurrentZoom();
+    const imageRectBeforeZoom = deps.image.getBoundingClientRect();
+
+    if (zoomIn) {
+      deps.setCurrentZoom(Math.min(oldZoom * zoomFactor, deps.getMaxZoom()));
+    } else {
+      deps.setCurrentZoom(Math.max(oldZoom / zoomFactor, deps.getMinZoom()));
+    }
+
+    const currentZoom = deps.getCurrentZoom();
+    if (Math.abs(currentZoom - oldZoom) <= 0.001) {
+      return false;
+    }
+
+    viewportInteractionStarted = true;
+
+    const wrapperRectNow = deps.wrapper.getBoundingClientRect();
+    // Over the black band there is no diagram under the pointer, so anchor on
+    // the nearest point of the diagram instead of a point off its edge.
+    const anchorClientX = Math.min(
+      Math.max(clientX, imageRectBeforeZoom.left),
+      imageRectBeforeZoom.right,
+    );
+    const anchorClientY = Math.min(
+      Math.max(clientY, imageRectBeforeZoom.top),
+      imageRectBeforeZoom.bottom,
+    );
+    const anchorXOnWrapper = anchorClientX - wrapperRectNow.left;
+    const anchorYOnWrapper = anchorClientY - wrapperRectNow.top;
+
+    const imageLeftOnWrapper = imageRectBeforeZoom.left - wrapperRectNow.left;
+    const imageTopOnWrapper = imageRectBeforeZoom.top - wrapperRectNow.top;
+    const imageBaseLeftOnWrapper = imageLeftOnWrapper - deps.getImageTranslateX();
+    const imageBaseTopOnWrapper = imageTopOnWrapper - deps.getImageTranslateY();
+
+    const targetX = (anchorXOnWrapper - imageLeftOnWrapper) / oldZoom;
+    const targetY = (anchorYOnWrapper - imageTopOnWrapper) / oldZoom;
+
+    deps.setImageTranslateX(
+      anchorXOnWrapper - imageBaseLeftOnWrapper - targetX * currentZoom,
+    );
+    deps.setImageTranslateY(
+      anchorYOnWrapper - imageBaseTopOnWrapper - targetY * currentZoom,
+    );
+
+    if (deps.getCurrentZoom() < deps.getMinZoom()) {
+      deps.setCurrentZoom(deps.getMinZoom());
+    }
+
+    const shouldExitFitAllOnThisStep =
+      wasFitAll &&
+      zoomIn &&
+      deps.getCurrentZoom() > deps.getMinZoom() + 0.0001 &&
+      typeof deps.exitFitAllStateOnly === "function";
+
+    if (shouldExitFitAllOnThisStep) {
+      deps.exitFitAllStateOnly();
+    }
+
+    deps.updateImageTransform();
+
+    if (typeof deps.maybePromoteFitGeometryToCover === "function") {
+      deps.maybePromoteFitGeometryToCover(anchorClientX, anchorClientY);
+    }
+
+    notifyViewportUserInput();
+    return true;
+  }
+
+  // One keypress is worth one mouse-wheel notch, which saturates the wheel's
+  // per-event step cap.
+  function zoomByKeyboardStep(zoomIn) {
+    const wrapperRect = deps.wrapper.getBoundingClientRect();
+    return zoomAtPoint(
+      ZOOM_STEP_RATIO ** MAX_WHEEL_STEPS,
+      zoomIn,
+      wrapperRect.left + wrapperRect.width / 2,
+      wrapperRect.top + wrapperRect.height / 2,
+    );
+  }
+
+  // Pan by a fraction of the viewport. updateImageTransform clamps, so a pan
+  // into the edge stops there instead of running off.
+  function panByViewportFraction(fractionX, fractionY) {
+    const wrapperRect = deps.wrapper.getBoundingClientRect();
+    if (!(wrapperRect.width > 0) || !(wrapperRect.height > 0)) return false;
+
+    deps.setImageTranslateX(deps.getImageTranslateX() - fractionX * wrapperRect.width);
+    deps.setImageTranslateY(deps.getImageTranslateY() - fractionY * wrapperRect.height);
+    viewportInteractionStarted = true;
+    deps.updateImageTransform();
+    notifyViewportUserInput();
+    return true;
+  }
+
+  function handleWheel(e) {
+    if (isDiagramLockedByModal()) {
+      if (e.cancelable) e.preventDefault();
+      return;
+    }
     if (isViewportLockedByMobileTooltip()) {
       const mobileTooltip = window.currentMobileTooltip;
       const rawTarget = e && e.target;
@@ -224,74 +331,16 @@ window.createViewportInputService = function createViewportInputService(deps) {
 
     e.preventDefault();
 
-    const imageRectBeforeZoom = deps.image.getBoundingClientRect();
-    const zoomFactor = ZOOM_STEP_RATIO ** getWheelZoomSteps(e);
-    if (e.deltaY < 0) {
-      deps.setCurrentZoom(Math.min(oldZoom * zoomFactor, deps.getMaxZoom()));
-    } else {
-      deps.setCurrentZoom(Math.max(oldZoom / zoomFactor, deps.getMinZoom()));
-    }
-
-    const currentZoom = deps.getCurrentZoom();
-    if (Math.abs(currentZoom - oldZoom) <= 0.001) {
-      return;
-    }
-
-    viewportInteractionStarted = true;
-
-    const wrapperRectNow = deps.wrapper.getBoundingClientRect();
-    // Over the black band there is no diagram under the pointer, so anchor on
-    // the nearest point of the diagram instead of a point off its edge.
-    const anchorClientX = Math.min(
-      Math.max(e.clientX, imageRectBeforeZoom.left),
-      imageRectBeforeZoom.right,
+    zoomAtPoint(
+      ZOOM_STEP_RATIO ** getWheelZoomSteps(e),
+      e.deltaY < 0,
+      e.clientX,
+      e.clientY,
     );
-    const anchorClientY = Math.min(
-      Math.max(e.clientY, imageRectBeforeZoom.top),
-      imageRectBeforeZoom.bottom,
-    );
-    const anchorXOnWrapper = anchorClientX - wrapperRectNow.left;
-    const anchorYOnWrapper = anchorClientY - wrapperRectNow.top;
-
-    const imageLeftOnWrapper = imageRectBeforeZoom.left - wrapperRectNow.left;
-    const imageTopOnWrapper = imageRectBeforeZoom.top - wrapperRectNow.top;
-    const imageBaseLeftOnWrapper = imageLeftOnWrapper - deps.getImageTranslateX();
-    const imageBaseTopOnWrapper = imageTopOnWrapper - deps.getImageTranslateY();
-
-    const targetX = (anchorXOnWrapper - imageLeftOnWrapper) / oldZoom;
-    const targetY = (anchorYOnWrapper - imageTopOnWrapper) / oldZoom;
-
-    deps.setImageTranslateX(
-      anchorXOnWrapper - imageBaseLeftOnWrapper - targetX * currentZoom,
-    );
-    deps.setImageTranslateY(
-      anchorYOnWrapper - imageBaseTopOnWrapper - targetY * currentZoom,
-    );
-
-    if (deps.getCurrentZoom() < deps.getMinZoom()) {
-      deps.setCurrentZoom(deps.getMinZoom());
-    }
-
-    const shouldExitFitAllOnThisStep =
-      wasFitAll &&
-      e.deltaY < 0 &&
-      deps.getCurrentZoom() > deps.getMinZoom() + 0.0001 &&
-      typeof deps.exitFitAllStateOnly === "function";
-
-    if (shouldExitFitAllOnThisStep) {
-      deps.exitFitAllStateOnly();
-    }
-
-    deps.updateImageTransform();
-
-    if (typeof deps.maybePromoteFitGeometryToCover === "function") {
-      deps.maybePromoteFitGeometryToCover(anchorClientX, anchorClientY);
-    }
-
-    notifyViewportUserInput();
   }
 
   function handleMouseDown(e) {
+    if (isDiagramLockedByModal()) return;
     if (isViewportLockedByMobileTooltip()) return;
     if (e.button !== 0) return;
     if (!deps.image.contains(e.target)) return;
@@ -387,6 +436,12 @@ window.createViewportInputService = function createViewportInputService(deps) {
   }
 
   function handleTouchStart(e) {
+    if (isDiagramLockedByModal()) {
+      deps.setIsPanning(false);
+      deps.setIsTouchActive(false);
+      return;
+    }
+
     if (isViewportLockedByMobileTooltip()) {
       deps.setIsPanning(false);
       deps.setIsTouchActive(false);
@@ -625,6 +680,8 @@ window.createViewportInputService = function createViewportInputService(deps) {
   return {
     initialize,
     handleResize,
+    zoomByKeyboardStep,
+    panByViewportFraction,
     handleWheel,
     handleMouseDown,
     handleMouseMove,

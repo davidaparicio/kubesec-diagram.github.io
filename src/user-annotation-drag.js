@@ -51,6 +51,15 @@ window.createUserAnnotationDragService = function createUserAnnotationDragServic
       }
     });
 
+    const editing = deps.getEditModeEnabled();
+    document.querySelectorAll(".arrow-annotation-handle").forEach((handle) => {
+      handle.style.display = editing ? "block" : "none";
+      handle.style.pointerEvents = editing ? "auto" : "none";
+    });
+    document.querySelectorAll(".arrow-annotation-hit").forEach((hit) => {
+      hit.style.cursor = editing ? "move" : "pointer";
+    });
+
     const areaAnnotations = document.querySelectorAll(".area-annotation");
     areaAnnotations.forEach((area) => {
       if (deps.getEditModeEnabled()) {
@@ -460,6 +469,7 @@ window.createUserAnnotationDragService = function createUserAnnotationDragServic
   }
 
   return {
+    getImageFrameInWrapper,
     updateUserAnnotationDragState,
     addUserAnnotationDragListeners,
     addAreaAnnotationDragListeners,

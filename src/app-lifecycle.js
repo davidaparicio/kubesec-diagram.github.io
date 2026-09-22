@@ -33,6 +33,7 @@ window.createAppLifecycleService = function createAppLifecycleService(deps) {
 
       deps.renderAllMarkers();
       deps.setFilterPanelOpen(deps.getFilterPanelOpen());
+      deps.onInitialViewReady();
     } catch (error) {
       hideLoadingState();
       console.error("Error during image load handling:", error);
