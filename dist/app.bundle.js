@@ -259,6 +259,8 @@ window.createUrlStateService = function createUrlStateService(deps) {
 
 // ---- ./src/tag-utils.js ----
 window.createTagUtilsService = function createTagUtilsService(deps) {
+  const TAG_PATH_SEPARATOR = ".";
+
   function escapeHTML(str) {
     const div = document.createElement("div");
     div.innerText = str;
@@ -322,6 +324,17 @@ window.createTagUtilsService = function createTagUtilsService(deps) {
 
   function getSortedVisibleTags(tags) {
     return [...new Set(getNonLevelTags(tags))].sort(compareTagsByFilterOrder);
+  }
+
+  function getTagParent(tag) {
+    const value = `${tag || ""}`;
+    const index = value.lastIndexOf(TAG_PATH_SEPARATOR);
+    return index > 0 ? value.slice(0, index) : null;
+  }
+
+  function getTagLeafName(tag) {
+    const value = `${tag || ""}`;
+    return value.slice(value.lastIndexOf(TAG_PATH_SEPARATOR) + 1);
   }
 
   function isLevelTag(tag) {
@@ -471,6 +484,8 @@ window.createTagUtilsService = function createTagUtilsService(deps) {
 
   return {
     parseTags,
+    getTagParent,
+    getTagLeafName,
     getTagFilterConfig,
     getTagMeta,
     getTagGroupMeta,
@@ -496,6 +511,11 @@ window.createTagUtilsService = function createTagUtilsService(deps) {
 
 // ---- ./src/tag-controls.js ----
 window.createTagControlsService = function createTagControlsService(deps) {
+  const TAG_TREE_LAYOUT = "tree";
+  const expandedTagPaths = new Set();
+  let tagTreeFilterQuery = "";
+  let tagTreeListExpanded = false;
+
   function getLevelLabel(level, maxLevel) {
     const normalizedLevel = Math.max(0, Number.parseInt(level, 10) || 0);
     const normalizedMax = Math.max(0, Number.parseInt(maxLevel, 10) || 0);
@@ -682,9 +702,6 @@ window.createTagControlsService = function createTagControlsService(deps) {
       groupTitle.textContent = groupMeta.label || groupMeta.id;
       groupWrap.appendChild(groupTitle);
 
-      const groupButtons = document.createElement("div");
-      groupButtons.className = "tag-group-buttons";
-
       const orderedTags = groupsMap.get(groupId).sort((a, b) => {
         const metaA = deps.getTagMeta(a);
         const metaB = deps.getTagMeta(b);
@@ -693,43 +710,370 @@ window.createTagControlsService = function createTagControlsService(deps) {
         }
         return (metaA.label || metaA.shortName).localeCompare(metaB.label || metaB.shortName);
       });
+      orderedTags.forEach(ensureTagVisibilityInitialized);
 
-      orderedTags.forEach((tag) => {
-        if (!deps.getTagVisibility().has(tag)) {
-          const initiallyVisible = deps.getHasInitialHiddenTags()
-            ? !deps.getInitialHiddenTags().has(tag)
-            : true;
-          deps.getTagVisibility().set(tag, initiallyVisible);
-        }
+      if (groupMeta.layout === TAG_TREE_LAYOUT) {
+        renderTagTreeGroup(groupWrap, groupTitle, orderedTags);
+      } else {
+        renderFlatTagGroup(groupWrap, orderedTags);
+      }
 
-        const tagMeta = deps.getTagMeta(tag);
-        const toggle = document.createElement("button");
-        toggle.type = "button";
-        toggle.className = "tag-filter-btn";
-        toggle.title = `Toggle tag: ${tag}`;
-        toggle.textContent = tagMeta.label || tag;
-        applyTagButtonStyle(tag, toggle);
-
-        updateTagToggleVisual(tag, toggle);
-        toggle.addEventListener("click", () => {
-          const currentlyVisible = deps.getTagVisibility().get(tag) !== false;
-          deps.getTagVisibility().set(tag, !currentlyVisible);
-          updateTagToggleVisual(tag, toggle);
-          applyTagVisibility(tag);
-          deps.applyAnnotationFilter();
-          deps.updateURLState();
-        });
-
-        groupButtons.appendChild(toggle);
-        applyTagVisibility(tag);
-      });
-
-      groupWrap.appendChild(groupButtons);
+      orderedTags.forEach(applyTagVisibility);
       deps.filterTagControls.appendChild(groupWrap);
     });
   }
 
+  function ensureTagVisibilityInitialized(tag) {
+    if (deps.getTagVisibility().has(tag)) return;
+    const initiallyVisible = deps.getHasInitialHiddenTags()
+      ? !deps.getInitialHiddenTags().has(tag)
+      : true;
+    deps.getTagVisibility().set(tag, initiallyVisible);
+  }
+
+  function createTagToggle(tag, label, onToggled) {
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "tag-filter-btn";
+    toggle.title = `Toggle tag: ${tag}`;
+    toggle.textContent = label;
+    applyTagButtonStyle(tag, toggle);
+    updateTagToggleVisual(tag, toggle);
+    toggle.addEventListener("click", () => {
+      const currentlyVisible = deps.getTagVisibility().get(tag) !== false;
+      deps.getTagVisibility().set(tag, !currentlyVisible);
+      updateTagToggleVisual(tag, toggle);
+      applyTagVisibility(tag);
+      if (onToggled) onToggled();
+      deps.applyAnnotationFilter();
+      deps.updateURLState();
+    });
+    return toggle;
+  }
+
+  function renderFlatTagGroup(groupWrap, tags) {
+    const groupButtons = document.createElement("div");
+    groupButtons.className = "tag-group-buttons";
+    tags.forEach((tag) => {
+      const tagMeta = deps.getTagMeta(tag);
+      groupButtons.appendChild(createTagToggle(tag, tagMeta.label || tag));
+    });
+    groupWrap.appendChild(groupButtons);
+  }
+
+  function isTagHidden(tag) {
+    return deps.getTagVisibility().get(tag) === false;
+  }
+
+  function getHiddenAncestor(tag) {
+    let parent = deps.getTagParent(tag);
+    while (parent) {
+      if (isTagHidden(parent)) return parent;
+      parent = deps.getTagParent(parent);
+    }
+    return null;
+  }
+
+  function buildTagTree(tags) {
+    const nodes = new Map();
+    const ensureNode = (path) => {
+      if (nodes.has(path)) return nodes.get(path);
+      const node = { path, isTag: false, children: [] };
+      nodes.set(path, node);
+      const parentPath = deps.getTagParent(path);
+      if (parentPath) ensureNode(parentPath).children.push(node);
+      return node;
+    };
+    tags.forEach((tag) => {
+      ensureNode(tag).isTag = true;
+    });
+
+    const sortNodes = (list) => {
+      list.sort((a, b) => a.path.localeCompare(b.path));
+      list.forEach((node) => sortNodes(node.children));
+      return list;
+    };
+    return sortNodes(Array.from(nodes.values()).filter((node) => !deps.getTagParent(node.path)));
+  }
+
+  function getTreeNodeLabel(node) {
+    const tagMeta = deps.getTagMeta(node.path);
+    return tagMeta.label && tagMeta.label !== node.path ? tagMeta.label : deps.getTagLeafName(node.path);
+  }
+
+  function getTagElementCount(tag) {
+    const elements = deps.getDiagramTagElements().get(tag);
+    return elements ? elements.length : 0;
+  }
+
+  function showTags(tags) {
+    tags.forEach((tag) => {
+      deps.getTagVisibility().set(tag, true);
+      applyTagVisibility(tag);
+    });
+    deps.applyAnnotationFilter();
+    deps.updateURLState();
+  }
+
+  function getDescendantTags(node) {
+    return node.children.flatMap((child) => [
+      ...(child.isTag ? [child.path] : []),
+      ...getDescendantTags(child),
+    ]);
+  }
+
+  function createTagTreeHeader(groupTitle, onToggle, onReset) {
+    const headerRow = document.createElement("div");
+    headerRow.className = "tag-tree-header-row";
+
+    const header = document.createElement("button");
+    header.type = "button";
+    header.className = "tag-tree-header";
+    const caret = document.createElement("span");
+    caret.className = "tag-tree-caret";
+    const meta = document.createElement("span");
+    meta.className = "tag-tree-meta";
+    header.appendChild(caret);
+    header.appendChild(groupTitle.cloneNode(true));
+    header.appendChild(meta);
+    header.addEventListener("click", onToggle);
+
+    const reset = document.createElement("button");
+    reset.type = "button";
+    reset.className = "tag-tree-link";
+    reset.textContent = "Reset";
+    reset.title = "Show all tags";
+    reset.addEventListener("click", onReset);
+
+    headerRow.appendChild(header);
+    headerRow.appendChild(reset);
+    groupTitle.replaceWith(headerRow);
+    return { header, meta, reset };
+  }
+
+  function renderTagTreeGroup(groupWrap, groupTitle, tags) {
+    const filterInput = document.createElement("input");
+    filterInput.type = "search";
+    filterInput.className = "tag-tree-filter";
+    filterInput.placeholder = "Filter tags...";
+    filterInput.autocomplete = "off";
+    filterInput.setAttribute("aria-label", "Filter tags");
+    filterInput.value = tagTreeFilterQuery;
+
+    const tree = document.createElement("div");
+    tree.className = "tag-tree";
+
+    const emptyMessage = document.createElement("small");
+    emptyMessage.className = "tag-tree-empty";
+    emptyMessage.textContent = "No tags match the filter.";
+
+    const panel = document.createElement("div");
+    panel.className = "tag-tree-panel tag-tree-collapsible";
+    const panelInner = document.createElement("div");
+    panelInner.className = "tag-tree-collapsible-inner";
+    panelInner.appendChild(tree);
+    panelInner.appendChild(emptyMessage);
+    panel.appendChild(panelInner);
+
+    const views = new Map();
+    const roots = buildTagTree(tags);
+    const refresh = () => refreshTagTree(tree, roots, views, emptyMessage, listView);
+    const listView = {
+      panel,
+      tags,
+      ...createTagTreeHeader(
+        groupTitle,
+        () => {
+          if (tagTreeFilterQuery.trim()) return;
+          tagTreeListExpanded = !tagTreeListExpanded;
+          refresh();
+        },
+        () => {
+          showTags(tags);
+          refresh();
+        },
+      ),
+    };
+    const toggleExpanded = (path) => {
+      if (tagTreeFilterQuery.trim()) return;
+      if (expandedTagPaths.has(path)) {
+        expandedTagPaths.delete(path);
+      } else {
+        expandedTagPaths.add(path);
+      }
+      refresh();
+    };
+
+    const createNode = (node, depth) => {
+      const hasChildren = node.children.length > 0;
+      const element = document.createElement("div");
+      element.className = "tag-tree-node";
+
+      const row = document.createElement("div");
+      row.className = hasChildren ? "tag-tree-row has-children" : "tag-tree-row";
+      row.style.setProperty("--tag-tree-depth", `${depth}`);
+
+      let caret;
+      if (hasChildren) {
+        caret = document.createElement("button");
+        caret.type = "button";
+        caret.className = "tag-tree-caret";
+        caret.setAttribute("aria-label", `Expand ${node.path}`);
+        caret.addEventListener("click", (event) => {
+          event.stopPropagation();
+          toggleExpanded(node.path);
+        });
+      } else {
+        caret = document.createElement("span");
+        caret.className = "tag-tree-caret-spacer";
+      }
+      row.appendChild(caret);
+
+      let toggle = null;
+      if (node.isTag) {
+        toggle = createTagToggle(node.path, getTreeNodeLabel(node), refresh);
+        toggle.classList.add("tag-tree-toggle");
+        toggle.addEventListener("click", (event) => event.stopPropagation());
+        row.appendChild(toggle);
+      } else {
+        const label = document.createElement("span");
+        label.className = "tag-tree-label";
+        label.textContent = getTreeNodeLabel(node);
+        row.appendChild(label);
+      }
+
+      const meta = document.createElement("span");
+      meta.className = "tag-tree-meta";
+      const metaHidden = document.createElement("button");
+      metaHidden.type = "button";
+      metaHidden.className = "tag-tree-link tag-tree-meta-hidden";
+      metaHidden.title = `Show all tags under ${node.path}`;
+      metaHidden.addEventListener("click", (event) => {
+        event.stopPropagation();
+        showTags(getDescendantTags(node));
+        refresh();
+      });
+      const metaCount = document.createElement("span");
+      const elementCount = node.isTag ? getTagElementCount(node.path) : 0;
+      metaCount.textContent = `${elementCount} ${elementCount === 1 ? "element" : "elements"}`;
+      meta.appendChild(metaHidden);
+      meta.appendChild(metaCount);
+      row.appendChild(meta);
+
+      row.addEventListener("click", () => {
+        if (hasChildren) {
+          toggleExpanded(node.path);
+        } else if (toggle && !toggle.disabled) {
+          toggle.click();
+        }
+      });
+      element.appendChild(row);
+
+      let childrenWrap = null;
+      if (hasChildren) {
+        childrenWrap = document.createElement("div");
+        childrenWrap.className = "tag-tree-children tag-tree-collapsible";
+        const childrenInner = document.createElement("div");
+        childrenInner.className = "tag-tree-children-inner tag-tree-collapsible-inner";
+        node.children.forEach((child) => childrenInner.appendChild(createNode(child, depth + 1)));
+        childrenWrap.appendChild(childrenInner);
+        element.appendChild(childrenWrap);
+      }
+
+      views.set(node.path, { element, row, caret, toggle, metaHidden, childrenWrap });
+      return element;
+    };
+    roots.forEach((root) => tree.appendChild(createNode(root, 0)));
+
+    filterInput.addEventListener("input", () => {
+      tagTreeFilterQuery = filterInput.value || "";
+      refresh();
+    });
+    filterInput.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape" || !filterInput.value) return;
+      event.stopPropagation();
+      filterInput.value = "";
+      tagTreeFilterQuery = "";
+      refresh();
+    });
+
+    groupWrap.appendChild(filterInput);
+    groupWrap.appendChild(panel);
+    refresh();
+  }
+
+  function refreshTagTree(tree, roots, views, emptyMessage, listView) {
+    const query = tagTreeFilterQuery.trim().toLowerCase();
+    const matchMemo = new Map();
+    const subtreeMatches = (node) => {
+      if (!query) return true;
+      if (!matchMemo.has(node.path)) {
+        matchMemo.set(
+          node.path,
+          node.path.toLowerCase().includes(query) || node.children.some(subtreeMatches),
+        );
+      }
+      return matchMemo.get(node.path);
+    };
+    const countHiddenDescendants = (node) =>
+      node.children.reduce(
+        (sum, child) => sum + (child.isTag && isTagHidden(child.path) ? 1 : 0) + countHiddenDescendants(child),
+        0,
+      );
+
+    let visibleRowIndex = 0;
+    const walk = (node, parentShown) => {
+      const view = views.get(node.path);
+      const matches = subtreeMatches(node);
+      const shown = parentShown && matches;
+      view.element.hidden = !matches;
+      if (shown) {
+        view.row.classList.toggle("is-striped", visibleRowIndex % 2 === 1);
+        visibleRowIndex += 1;
+      }
+
+      let expanded = false;
+      if (view.childrenWrap) {
+        expanded = query ? node.children.some(subtreeMatches) : expandedTagPaths.has(node.path);
+        view.element.classList.toggle("is-expanded", expanded);
+        view.childrenWrap.classList.toggle("is-collapsed", !expanded);
+        view.caret.setAttribute("aria-expanded", expanded ? "true" : "false");
+        node.children.forEach((child) => walk(child, shown && expanded));
+      }
+
+      const hiddenBelow = view.childrenWrap && !expanded ? countHiddenDescendants(node) : 0;
+      view.metaHidden.textContent = hiddenBelow > 0 ? `${hiddenBelow} hidden \u00B7 show` : "";
+
+      if (view.toggle) {
+        updateTagToggleVisual(node.path, view.toggle);
+        const hiddenAncestor = getHiddenAncestor(node.path);
+        view.toggle.classList.toggle("ancestor-hidden", Boolean(hiddenAncestor));
+        view.toggle.title = hiddenAncestor
+          ? `Toggle tag: ${node.path} (hidden by parent ${hiddenAncestor})`
+          : `Toggle tag: ${node.path}`;
+      }
+    };
+
+    const listOpen = query.length > 0 || tagTreeListExpanded;
+    tree.classList.toggle("is-filtering", query.length > 0);
+    listView.header.classList.toggle("is-filtering", query.length > 0);
+    listView.header.classList.toggle("is-expanded", listOpen);
+    listView.header.setAttribute("aria-expanded", listOpen ? "true" : "false");
+    listView.panel.classList.toggle("is-collapsed", !listOpen);
+    const hiddenTotal = listView.tags.filter(isTagHidden).length;
+    listView.meta.textContent = `${listView.tags.length} tags${hiddenTotal > 0 ? ` \u00B7 ${hiddenTotal} hidden` : ""}`;
+    listView.reset.hidden = hiddenTotal === 0;
+
+    roots.forEach((root) => walk(root, listOpen));
+    emptyMessage.hidden = !query || roots.some(subtreeMatches);
+  }
+
+  function clearTagTreeFilter() {
+    tagTreeFilterQuery = "";
+  }
+
   return {
+    clearTagTreeFilter,
     applyTagVisibility,
     updateTagToggleVisual,
     applyTagButtonStyle,
@@ -1373,6 +1717,7 @@ window.createFilterPanelInputService = function createFilterPanelInputService(de
         deps.getTagVisibility().set(tag, true);
       });
 
+      deps.clearTagTreeFilter();
       deps.initializeTagControls();
       deps.applyAnnotationFilter();
       deps.updateURLState();
@@ -7311,6 +7656,8 @@ const tagControlsService = window.createTagControlsService({
   image,
   filterTagControls,
   parseTags: (tagValue) => tagUtilsService.parseTags(tagValue),
+  getTagParent: (tag) => tagUtilsService.getTagParent(tag),
+  getTagLeafName: (tag) => tagUtilsService.getTagLeafName(tag),
   isLevelTag: (tag) => tagUtilsService.isLevelTag(tag),
   isCssTag: (tag) => tagUtilsService.isCssTag(tag),
   getTagLevel: (tags) => tagUtilsService.getTagLevel(tags),
@@ -7567,6 +7914,7 @@ const filterPanelInputService = window.createFilterPanelInputService({
     annotationSearchQuery = value;
   },
   applyAnnotationFilter: () => filterResultsService.applyAnnotationFilter(),
+  clearTagTreeFilter: () => tagControlsService.clearTagTreeFilter(),
   initializeTagControls: () => tagControlsService.initializeTagControls(),
   updateURLState: () => urlStateService.updateURLState(),
   isAnyAnnotationModalOpen: () => {

@@ -1,4 +1,6 @@
 window.createTagUtilsService = function createTagUtilsService(deps) {
+  const TAG_PATH_SEPARATOR = ".";
+
   function escapeHTML(str) {
     const div = document.createElement("div");
     div.innerText = str;
@@ -62,6 +64,17 @@ window.createTagUtilsService = function createTagUtilsService(deps) {
 
   function getSortedVisibleTags(tags) {
     return [...new Set(getNonLevelTags(tags))].sort(compareTagsByFilterOrder);
+  }
+
+  function getTagParent(tag) {
+    const value = `${tag || ""}`;
+    const index = value.lastIndexOf(TAG_PATH_SEPARATOR);
+    return index > 0 ? value.slice(0, index) : null;
+  }
+
+  function getTagLeafName(tag) {
+    const value = `${tag || ""}`;
+    return value.slice(value.lastIndexOf(TAG_PATH_SEPARATOR) + 1);
   }
 
   function isLevelTag(tag) {
@@ -211,6 +224,8 @@ window.createTagUtilsService = function createTagUtilsService(deps) {
 
   return {
     parseTags,
+    getTagParent,
+    getTagLeafName,
     getTagFilterConfig,
     getTagMeta,
     getTagGroupMeta,

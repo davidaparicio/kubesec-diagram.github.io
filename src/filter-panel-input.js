@@ -39,6 +39,7 @@ window.createFilterPanelInputService = function createFilterPanelInputService(de
         deps.getTagVisibility().set(tag, true);
       });
 
+      deps.clearTagTreeFilter();
       deps.initializeTagControls();
       deps.applyAnnotationFilter();
       deps.updateURLState();

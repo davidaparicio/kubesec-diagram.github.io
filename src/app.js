@@ -1308,6 +1308,8 @@ const tagControlsService = window.createTagControlsService({
   image,
   filterTagControls,
   parseTags: (tagValue) => tagUtilsService.parseTags(tagValue),
+  getTagParent: (tag) => tagUtilsService.getTagParent(tag),
+  getTagLeafName: (tag) => tagUtilsService.getTagLeafName(tag),
   isLevelTag: (tag) => tagUtilsService.isLevelTag(tag),
   isCssTag: (tag) => tagUtilsService.isCssTag(tag),
   getTagLevel: (tags) => tagUtilsService.getTagLevel(tags),
@@ -1564,6 +1566,7 @@ const filterPanelInputService = window.createFilterPanelInputService({
     annotationSearchQuery = value;
   },
   applyAnnotationFilter: () => filterResultsService.applyAnnotationFilter(),
+  clearTagTreeFilter: () => tagControlsService.clearTagTreeFilter(),
   initializeTagControls: () => tagControlsService.initializeTagControls(),
   updateURLState: () => urlStateService.updateURLState(),
   isAnyAnnotationModalOpen: () => {

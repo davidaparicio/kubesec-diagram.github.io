@@ -50,7 +50,7 @@ const config = {
   tagFilters: {
     groups: [
       { id: "priority", label: "Priority", order: 1 },
-      { id: "general", label: "Tags", order: 10, disableHelpIfHidden: true },
+      { id: "general", label: "Tags", order: 10, disableHelpIfHidden: true, layout: "tree" },
     ],
     tags: {
       info: {
