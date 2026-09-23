@@ -41,6 +41,7 @@ const config = {
       "./src/app-lifecycle.js",
       "./src/svg-help.js",
       "./src/svg-loader.js",
+      "./src/link-info.js",
       "./src/keyboard-shortcuts.js",
       "./src/about-modal.js",
       "./src/app.js",

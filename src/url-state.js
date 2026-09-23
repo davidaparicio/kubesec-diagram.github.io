@@ -6,6 +6,10 @@ window.createUrlStateService = function createUrlStateService(deps) {
     return `${url.pathname}${search ? `?${search}` : ""}${url.hash}`;
   }
 
+  function toAbsoluteReadableUrl(url) {
+    return `${url.origin}${toReadableUrl(url)}`;
+  }
+
   function serializeFilterState() {
     const explicitlyHidden = new Set(
       deps
@@ -108,7 +112,7 @@ window.createUrlStateService = function createUrlStateService(deps) {
       const userAnnotations = deps.getUserAnnotations();
 
       if (!userAnnotations || userAnnotations.length === 0) {
-        url.searchParams.delete("annotations");
+        url.searchParams.delete(deps.annotationsParam);
       } else {
         const jsonString = JSON.stringify(userAnnotations, (key, value) =>
           // Rendered DOM (_el, _tooltip, _arrow, ...) is runtime state, not
@@ -116,7 +120,7 @@ window.createUrlStateService = function createUrlStateService(deps) {
           key.startsWith("_") ? undefined : value,
         );
         const base64 = btoa(unescape(encodeURIComponent(jsonString)));
-        url.searchParams.set("annotations", base64);
+        url.searchParams.set(deps.annotationsParam, base64);
       }
 
       const viewportValue =
@@ -213,7 +217,7 @@ window.createUrlStateService = function createUrlStateService(deps) {
   function parseUserAnnotationsFromURL() {
     try {
       const urlParams = new URLSearchParams(window.location.search);
-      const annotationsParam = urlParams.get("annotations");
+      const annotationsParam = urlParams.get(deps.annotationsParam);
 
       if (!annotationsParam) {
         return [];
@@ -293,6 +297,7 @@ window.createUrlStateService = function createUrlStateService(deps) {
   }
 
   return {
+    toAbsoluteReadableUrl,
     serializeFilterState,
     parseFilterStateFromURL,
     updateURLState,

@@ -93,6 +93,30 @@ const FILTER_CONSTRAINT_PARAM = "constraint";
 const FILTER_LEVEL_PARAM = "filter-level";
 const TAGS_EXPANDED_PARAM = "tags";
 const VIEWPORT_PARAM = "v";
+const ANNOTATIONS_PARAM = "annotations";
+// Shown in the ? modal. script.js reads debug and runtime before the app loads.
+// kind: text | list (comma-separated) | enum (one of values) | enum-multi
+// (comma-separated subset of values) | blob | flag (presence only).
+// values may be a function when the choices depend on the loaded diagram;
+// "" stands for leaving the parameter out.
+const URL_PARAM_DOCS = [
+  { name: VIEWPORT_PARAM, kind: "text", description: "View: center x, y, width, height (0-1) or fit" },
+  { name: ANNOTATIONS_PARAM, kind: "blob", description: "User annotations, base64 JSON" },
+  { name: MENU_VISIBLE_PARAM, kind: "enum", values: ["true", "false"], description: "Filter panel open" },
+  { name: FILTER_QUERY_PARAM, kind: "text", description: "Search text" },
+  { name: FILTER_HIDE_TAGS_PARAM, kind: "list", description: "Hidden tags" },
+  { name: FILTER_PINS_PARAM, kind: "list", description: "Pinned annotations" },
+  { name: FILTER_CONSTRAINT_PARAM, kind: "enum-multi", values: ["pinned", ""], description: "Result constraints" },
+  {
+    name: FILTER_LEVEL_PARAM,
+    kind: "enum",
+    values: () => Array.from({ length: maxDiagramLevel + 1 }, (_, level) => `${level}`),
+    description: "Detail level, omitted at max",
+  },
+  { name: TAGS_EXPANDED_PARAM, kind: "enum", values: ["open", ""], description: "Tag tree expanded" },
+  { name: "debug", kind: "flag", description: "Local diagram source, debug logs" },
+  { name: "runtime", kind: "enum", values: ["modules", "bundle"], description: "Script loading mode" },
+];
 const VIEWPORT_URL_SYNC_DELAY = 400;
 const THEME_STORAGE_KEY = "kubesec-theme";
 const ABOUT_STORAGE_KEY = "kubesec-about";
@@ -1019,6 +1043,7 @@ const urlStateService = window.createUrlStateService({
   getMaxUserAnnotations: () => (config && config.maxUserAnnotations) || 10,
   getViewportUrlValue: () => viewportUrlService.getUrlValue(),
   viewportParam: VIEWPORT_PARAM,
+  annotationsParam: ANNOTATIONS_PARAM,
   menuVisibleParam: MENU_VISIBLE_PARAM,
   filterHideTagsParam: FILTER_HIDE_TAGS_PARAM,
   filterQueryParam: FILTER_QUERY_PARAM,
@@ -1715,6 +1740,20 @@ const aboutModalService = window.createAboutModalService({
   storageKey: ABOUT_STORAGE_KEY,
 });
 
+if (typeof window.createLinkInfoService !== "function") {
+  console.error("Missing link info module: createLinkInfoService");
+  throw new Error("Missing link info module");
+}
+
+const linkInfoService = window.createLinkInfoService({
+  paramDocs: URL_PARAM_DOCS,
+  viewportParam: VIEWPORT_PARAM,
+  annotationsParam: ANNOTATIONS_PARAM,
+  filterHideTagsParam: FILTER_HIDE_TAGS_PARAM,
+  toAbsoluteReadableUrl: (url) => urlStateService.toAbsoluteReadableUrl(url),
+  getUserAnnotationCount: () => (userAnnotations ? userAnnotations.length : 0),
+});
+
 if (typeof window.createKeyboardShortcutsService !== "function") {
   console.error("Missing keyboard shortcuts module: createKeyboardShortcutsService");
   throw new Error("Missing keyboard shortcuts module");
@@ -1728,6 +1767,7 @@ const keyboardShortcutsService = window.createKeyboardShortcutsService({
   panByViewportFraction: (fractionX, fractionY) =>
     viewportInputService.panByViewportFraction(fractionX, fractionY),
   setFitAllMode: (enabled) => setFitAllMode(enabled),
+  onShortcutModalOpen: () => linkInfoService.render(),
   isAnyModalOpen: () => {
     const modals = [
       document.getElementById("user-annotations-modal"),
@@ -1755,6 +1795,7 @@ themeToggleBtn.addEventListener("click", () => {
 filterPanelInputService.initialize();
 aboutModalService.initialize();
 keyboardShortcutsService.initialize();
+linkInfoService.initialize();
 
 // Show loading state immediately
 appLifecycleService.start();

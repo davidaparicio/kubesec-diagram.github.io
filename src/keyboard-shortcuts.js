@@ -31,6 +31,7 @@ window.createKeyboardShortcutsService = function createKeyboardShortcutsService(
   function setShortcutModalOpen(open) {
     const modal = getShortcutModal();
     if (!modal) return;
+    if (open) deps.onShortcutModalOpen();
     modal.style.display = open ? "flex" : "none";
     document.body.classList.toggle("modal-locks-diagram", open);
   }
