@@ -13,7 +13,7 @@ const svg = new URL("./kubesec-diagram.svg", import.meta.url).href;
 
 export default defineDiagram({
   id: "kubesec",
-  requires: "^0.1.0",
+  requires: ">=0.1.1", // any newer engine; the deploy always builds with the latest
   source: { production: svg, debug: svg },
   tags: { groups, meta, descriptions },
   annotations,

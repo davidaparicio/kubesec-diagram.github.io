@@ -35,14 +35,15 @@
     "validate": "diagram-webkit validate kubesec-diagram.svg --definition definition.js",
     "generate": "node scripts/changelog.mjs --write && diagram-webkit tag-tree METADATA.md --out config/tag-descriptions.generated.js",
     "check": "node scripts/check-no-logic.mjs && npm run validate",
-    "test:parity": "sh tests/parity/setup.sh && playwright test --config tests/parity/playwright.config.ts"
+    "test:parity": "sh tests/parity/setup.sh && playwright test --config tests/parity/playwright.config.ts",
+    "engine:latest": "npm install diagram-webkit@latest --no-save --prefer-online --no-audit --no-fund && npm ls diagram-webkit"
   },
   "dependencies": {
-    "diagram-webkit": "^0.1.1"
+    "diagram-webkit": ">=0.1.2"
   },
   "devDependencies": {
-    "vite": "^8.3.0",
-    "@playwright/test": "1.63"
+    "@playwright/test": "1.63",
+    "vite": "^8.3.0"
   },
   "x-ported-from": {
     "repository": "https://github.com/kubesec-diagram/kubesec-diagram.github.io",

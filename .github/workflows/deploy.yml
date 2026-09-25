@@ -1,8 +1,13 @@
 name: Deploy to GitHub Pages
 
+# Built with the latest diagram-webkit on npm, not the lockfile's. The daily
+# run brings new engine versions live without a push here.
 on:
   push:
     branches: [main]
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -19,6 +24,7 @@ jobs:
           node-version: lts/*
           cache: npm
       - run: npm ci
+      - run: npm run engine:latest
       - run: npm run validate
       - run: npm run build
       - uses: actions/upload-pages-artifact@v4

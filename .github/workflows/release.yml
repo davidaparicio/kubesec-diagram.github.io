@@ -49,6 +49,7 @@ jobs:
           node-version: lts/*
           cache: npm
       - run: npm ci
+      - run: npm run engine:latest
       - run: npm run check
       - run: npm run build
       # The tag points at a commit whose package.json and version module say
