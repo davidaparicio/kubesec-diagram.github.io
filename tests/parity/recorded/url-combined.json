@@ -1,0 +1,13 @@
+{
+  "search": "?menu=true&filter-query=api&filter-hide-tags=Logging&pins=KubeApi&filter-level=2&tags=open&v=0.4,0.6,0.3,0.3",
+  "visibleTagged": 326,
+  "ui": {
+    "panelOpen": true,
+    "docked": true,
+    "overlay": false,
+    "fitAll": false,
+    "dark": false,
+    "modalLocked": false
+  },
+  "searchValue": "api"
+}

@@ -1,8 +1,83 @@
 {
-  "name": "kubesec-diagram-site",
+  "name": "kubesec-diagram",
+  "version": "2026.9.4",
   "private": true,
-  "version": "0.0.0",
+  "description": "Kubernetes security diagram definition for diagram-webkit",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kubesec-diagram/kubesec-diagram.github.io.git"
+  },
+  "homepage": "https://kubesec-diagram.github.io",
+  "bugs": "https://github.com/kubesec-diagram/kubesec-diagram.github.io/issues",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./definition": "./definition.js",
+    "./kubesec-diagram.svg": "./kubesec-diagram.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "definition.js",
+    "views.js",
+    "config",
+    "content",
+    "kubesec-diagram.svg",
+    "METADATA.md"
+  ],
   "scripts": {
-    "build:bundle": "node scripts/build-bundle.mjs"
+    "predev": "node scripts/changelog.mjs --write",
+    "dev": "vite",
+    "prebuild": "node scripts/changelog.mjs --write",
+    "build": "vite build",
+    "preview": "vite preview",
+    "validate": "diagram-webkit validate kubesec-diagram.svg --definition definition.js",
+    "generate": "node scripts/changelog.mjs --write && diagram-webkit tag-tree METADATA.md --out config/tag-descriptions.generated.js",
+    "check": "node scripts/check-no-logic.mjs && npm run validate",
+    "test:parity": "sh tests/parity/setup.sh && playwright test --config tests/parity/playwright.config.ts"
+  },
+  "dependencies": {
+    "diagram-webkit": "^0.1.1"
+  },
+  "devDependencies": {
+    "vite": "^8.3.0",
+    "@playwright/test": "1.63"
+  },
+  "x-ported-from": {
+    "repository": "https://github.com/kubesec-diagram/kubesec-diagram.github.io",
+    "commit": "9847549b2d529942ad21339ea3a36c89f2e8f833",
+    "tag": "v2026.09.4",
+    "files": {
+      "data.js": [
+        "config/tags.js",
+        "config/annotations.js",
+        "config/ui.js"
+      ],
+      "index.html": [
+        "content/page.js",
+        "content/about.js",
+        "content/footer.js"
+      ],
+      "styles.css": [
+        "content/css.js"
+      ],
+      "METADATA.md": [
+        "METADATA.md",
+        "config/tag-descriptions.generated.js (generated)"
+      ],
+      "kubesec-diagram.svg": [
+        "kubesec-diagram.svg"
+      ],
+      "LICENSE": [
+        "LICENSE"
+      ],
+      "README.md": [
+        "README.md"
+      ],
+      ".gitattributes": [
+        ".gitattributes"
+      ]
+    }
   }
 }

@@ -1,0 +1,10 @@
+{
+  "variants": [
+    "Current",
+    "Clean"
+  ],
+  "params": [
+    "menu",
+    "pins"
+  ]
+}

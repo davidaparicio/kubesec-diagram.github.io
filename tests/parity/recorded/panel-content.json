@@ -1,0 +1,26 @@
+{
+  "summary": "Showing all annotations (95)",
+  "pinnedTitle": "Pinned (1)",
+  "firstResults": [
+    "RBAC",
+    "Default Pod-to-Pod Traffic",
+    "Gateway",
+    "GatewayClass",
+    "Image Repository",
+    "Ingress",
+    "Kubernetes API",
+    "Namespaces",
+    "Network Control",
+    "Non-Root Execution",
+    "Pod Security Admission (PSA)",
+    "The Container Process"
+  ],
+  "resultCount": 95,
+  "treeMeta": "75 tags",
+  "levelValue": "Level max",
+  "filteredSummary": "5 matches for \"etcd\"",
+  "levelSummary": "0 matches for \"etcd\"",
+  "hiddenReason": [
+    "Hidden because one or more required tags are filtered out."
+  ]
+}

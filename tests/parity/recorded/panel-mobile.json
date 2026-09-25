@@ -1,0 +1,27 @@
+{
+  "open": {
+    "panelOpen": true,
+    "docked": false,
+    "overlay": true,
+    "fitAll": false,
+    "dark": false,
+    "modalLocked": false
+  },
+  "openTransform": [
+    1,
+    0,
+    0,
+    1,
+    0,
+    0
+  ],
+  "panelWidth": 391,
+  "closed": {
+    "panelOpen": true,
+    "docked": false,
+    "overlay": true,
+    "fitAll": false,
+    "dark": false,
+    "modalLocked": false
+  }
+}

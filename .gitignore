@@ -1,6 +1,7 @@
-\.\$*
-
-# dist/
-node_modules/
-
 .base.yaml
+node_modules
+dist
+\.\$*
+tests/parity/.reference
+tests/parity/.current
+test-results

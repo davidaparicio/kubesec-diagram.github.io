@@ -1,0 +1,73 @@
+name: release
+
+# A new top entry "* vYYYY.MM.N" under "## Changelog" in README.md is a new
+# version (scripts/changelog.mjs). On push to main, when its tag does not
+# exist yet: check and build, commit package.json and
+# config/version.generated.js ([skip ci]), then tag v<version> and a GitHub
+# release with the entry's notes. Not published to npm: consumers use the tag
+# (github:kubesec-diagram/kubesec-diagram.github.io#v<version>).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.read.outputs.release }}
+      tag: ${{ steps.read.outputs.tag }}
+      version: ${{ steps.read.outputs.version }}
+      notes: ${{ steps.read.outputs.notes }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: lts/*
+      - id: read
+        run: node scripts/changelog.mjs --github >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: changelog
+    if: needs.changelog.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # version commit, tag and GitHub release
+    env:
+      TAG: ${{ needs.changelog.outputs.tag }}
+      VERSION: ${{ needs.changelog.outputs.version }}
+      NOTES: ${{ needs.changelog.outputs.notes }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: lts/*
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build
+      # The tag points at a commit whose package.json and version module say
+      # this version.
+      - name: Commit the version
+        run: |
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          git add package.json package-lock.json config/version.generated.js
+          if git diff --cached --quiet; then
+            echo "already at $TAG"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "kubesec-diagram $TAG [skip ci]"
+            git push origin "HEAD:$GITHUB_REF_NAME"
+          fi
+      - name: Tag and GitHub release
+        run: |
+          printf '%s\n' "$NOTES" > "$RUNNER_TEMP/notes.md"
+          gh release create "$TAG" --target "$(git rev-parse HEAD)" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+        env:
+          GH_TOKEN: ${{ github.token }}

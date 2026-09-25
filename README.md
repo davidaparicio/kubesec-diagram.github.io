@@ -21,6 +21,15 @@ It is made for the purpose stated above inside Telenor Norway. It doesn't reflec
 
 ## Changelog
 
+* v2026.09.5
+  * Rebuilt on [diagram-webkit](https://github.com/diagram-webkit/diagram-webkit)
+    * Took the entire rendering engine used by kubesec-diagram and put into it's own project
+    * kubesec-diagram now depends on that instead, containing only the data, not the engine
+    * Changelog on this project can be much cleaner now, focusing on the diagram, not functionality
+  * Many usability fixes, general cleanup, and a lot of bugfixes
+  * Fix XSS possible when sharing links with user annotations
+  * Elements can be highlighted
+  * Lot more.. :)
 * v2026.09.4
   * Total redesign and remapping of tags, levels and slugs. Big cleanup
   * Many fixes how tags are represented
@@ -149,13 +158,10 @@ Take a look at [kubesec-diagram.github.io](https://kubesec-diagram.github.io)
 
 The interactive page supports these query parameters:
 
+* `v`
+  * View: `cx,cy,w,h` (0-1 of the diagram) or `fit`. Written once you move the diagram.
 * `debug`
-  * Uses local diagram source (`config.imagePaths.debug`) instead of production source.
-  * Turns on some debug logs in some cases
-* `runtime`
-  * `runtime=modules` forces module runtime (`src/*.js`).
-  * `runtime=bundle` forces bundle runtime (`dist/app.bundle.js`).
-  * If not set: localhost defaults to `modules`, other hosts default to `bundle`.
+  * Turns on some debug logs in some cases (duplicate/missing `data-slug`).
 * `annotations`
   * Base64-encoded user annotations payload used for sharing annotation state.
 * `menu`
@@ -164,7 +170,32 @@ The interactive page supports these query parameters:
   * Restores filter search query.
 * `filter-hide-tags`
   * Comma-separated list of hidden tags.
+* `only-tags`
+  * Comma-separated list of tags to keep; every other topic tag is hidden (ancestors and descendants stay).
+* `filter-level`
+  * Detail level, left out at the maximum.
+* `tags`
+  * `tags=open` expands the tag tree.
 * `pins`
   * Comma-separated list of pinned annotation slugs (`data-slug` on SVG elements).
-* `constraint`
-  * Currently supported: `constraint=pinned` (only show pinned items).
+* `highlight`
+  * Comma-separated slugs to highlight; `tag:<tag>`, `id:<cell-id>` and `mode:outline|pulse|dim-others` are also accepted.
+
+## Development
+
+The page is built with [diagram-webkit](https://github.com/diagram-webkit/diagram-webkit); this repository holds the diagram and its data only.
+
+```sh
+npm install
+npm run dev        # local server
+npm run build      # static site in dist/
+npm run validate   # slugs, tag ancestors and views against the SVG
+npm run generate   # config/tag-descriptions.generated.js from METADATA.md (dev/build do this too)
+npm run check      # data only (no DOM code) + validate
+npx playwright install chromium
+npm run test:parity   # old links give the same view as the site before diagram-webkit (v2026.09.4)
+```
+
+Releases: add a new entry at the top of the Changelog above (`* vYYYY.MM.N` with its bullet points) and push to `main`. `.github/workflows/release.yml` sees the new version, then checks, builds and creates the tag `vYYYY.MM.N` and a GitHub release with those bullet points. Not on npm: decks depend on the tag (`github:kubesec-diagram/kubesec-diagram.github.io#vYYYY.MM.N`). The version on the site comes from the same entry (`config/version.generated.js`, written by `npm run dev` / `build`).
+
+Local development uses the diagram-webkit checkout at `~/base/diagram-webkit/repo` when it exists (`.envrc`, direnv; `direnv allow` once). Engine edits then hot-reload, and `npm run dev` prints `diagram-webkit: local engine …`. Another checkout: `export DIAGRAM_WEBKIT_DIR=<path>`; the installed package for one command: `DIAGRAM_WEBKIT_DIR= npm run dev`. CI has no direnv and uses the installed package.
